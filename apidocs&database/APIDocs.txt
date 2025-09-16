@@ -1,0 +1,388 @@
+QURANI API DOCUMENTATION
+
+1. POST /live/start/{surah_id}/{ayah}
+
+Parameters : 
+- surah_id : int (required)
+- ayah : int (required)
+
+Request Body : 
+{
+  "user_id": "string",
+  "mode": "surah",
+  "surah_id": 0,
+  "juz_id": 0,
+  "page_id": 0,
+  "ayah": 0,
+  "data": {}
+}
+
+Response Body : 
+{
+  "sessionId": "string",
+  "surah_id": 0,
+  "ayah": 0,
+  "status": "active",
+  "position": 0,
+  "message": "Live session started successfully"
+}
+
+2. PATCH /live/move/{session_id}
+
+Parameters :
+- session_id : string (required)
+
+Request Body : 
+{
+  "ayah": 0,
+  "position": 0
+}
+
+Response Body : 
+{
+  "sessionId": "string",
+  "surah_id": 0,
+  "ayah": 0,
+  "status": "active",
+  "position": 0,
+  "message": "Moved to new ayah successfully"
+}
+
+3. POST /live/end/{session_id}
+
+Parameters :
+- session_id : string (required)
+
+Response Body : 
+{
+  "sessionId": "string",
+  "status": "active",
+  "message": "Live session ended successfully"
+}
+
+4. GET /live/status/{session_id}
+
+Parameters : 
+- session_id : string (required)
+
+Response Body : 
+"string"
+
+5. GET /live/active
+
+Response Body : 
+
+"string"
+
+6. GET /memory/stats
+
+Response Body :
+"string"
+
+7. POST /transcript/{surah_id}/{ayah}
+
+Parameters : 
+- surah_id : int (required)
+- ayah : int (required)
+
+Request Body : 
+{
+  "transcript": "string",
+  "surah_id": 0,
+  "ayah": 0
+}
+
+Response Body : 
+{
+  "success": true,
+  "results": [
+    {
+      "position": 0,
+      "expected": "string",
+      "spoken": "string",
+      "status": "matched",
+      "similarity_score": 0
+    }
+  ],
+  "summary": {
+    "additionalProp1": 0,
+    "additionalProp2": 0,
+    "additionalProp3": 0
+  },
+  "message": "string"
+}
+
+8. POST /maintenance/cleanup
+
+Response Body : 
+"string"
+
+9. DELETE /memory/session/{session_id}
+
+Parameters : 
+- session_id : string (required)
+
+Response Body : 
+"string"
+
+
+QURANI API USAGE EXAMPLE
+
+1. POST /live/start/{surah_id}/{ayah}
+
+Parameters : 
+- surah_id : 36
+- ayah : int 1
+
+Request Body : 
+{
+  "user_id": "dummy",
+  "mode": "surah",
+  "surah_id": 36,
+  "juz_id": 22,
+  "page_id": 440,
+  "ayah": 1,
+  "data": {}
+}
+
+Response Body : 
+{
+  "sessionId": "78ac07c5-f0e1-402d-b7d6-d0cfcf8794d4",
+  "surah_id": 36,
+  "ayah": 1,
+  "status": "active",
+  "position": 0,
+  "message": "Session started in memory"
+}
+
+2. PATCH /live/move/{session_id}
+
+Parameters :
+- session_id : 78ac07c5-f0e1-402d-b7d6-d0cfcf8794d4
+
+Request Body : 
+{
+  "ayah": 82,
+  "position": 0
+}
+
+Response Body : 
+{
+  "sessionId": "78ac07c5-f0e1-402d-b7d6-d0cfcf8794d4",
+  "surah_id": 36,
+  "ayah": 82,
+  "status": "active",
+  "position": 0,
+  "message": "Moved to ayah 82 in memory"
+}
+
+3. POST /live/end/{session_id}
+
+Parameters :
+- session_id : string (required)
+
+Response Body : 
+{
+  "error": true,
+  "message": "1 validation error for LiveSession\nsession_id\n  Field required [type=missing, input_value={'id': '78ac07c5-f0e1-402... 16, 3, 34, 40, 583466)}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.5/v/missing",
+  "status_code": 404,
+  "timestamp": "2025-09-16T03:34:40.585037"
+}
+
+4. GET /live/status/{session_id}
+
+Parameters : 
+- session_id : 78ac07c5-f0e1-402d-b7d6-d0cfcf8794d4
+
+Response Body : 
+{
+  "success": true,
+  "data": {
+    "sessionId": "78ac07c5-f0e1-402d-b7d6-d0cfcf8794d4",
+    "status": "active",
+    "surah_id": 36,
+    "ayah": 82,
+    "position": 0,
+    "mode": "surah",
+    "is_persisted": false,
+    "total_words": 10,
+    "current_ayah": {
+      "arabic": "اِنَّمَآ اَمْرُهٗٓ اِذَآ اَرَادَ شَيْـًٔاۖ اَنْ يَّقُوْلَ لَهٗ كُنْ فَيَكُوْنُ",
+      "transliteration": "Innamā amruhū iżā arāda syai'an ay yaqūla lahū kun fa yakūn(u).",
+      "words_array": [
+        "اِنَّمَآ",
+        "اَمْرُهٗٓ",
+        "اِذَآ",
+        "اَرَادَ",
+        "شَيْـًٔاۖ",
+        "اَنْ",
+        "يَّقُوْلَ",
+        "لَهٗ",
+        "كُنْ",
+        "فَيَكُوْنُ"
+      ]
+    },
+    "created_at": "2025-09-16T03:29:08.861130",
+    "updated_at": "2025-09-16T03:35:20.827741"
+  },
+  "message": "Memory session status retrieved successfully",
+  "source": "memory"
+}
+
+5. GET /live/active
+
+Response Body : 
+{
+  "success": true,
+  "data": {
+    "active_sessions": [
+      {
+        "session_id": "78ac07c5-f0e1-402d-b7d6-d0cfcf8794d4",
+        "user_id": "dummy",
+        "surah_id": 36,
+        "ayah": 2,
+        "position": 0,
+        "mode": "surah",
+        "status": "active",
+        "is_persisted": false,
+        "created_at": "2025-09-16T03:29:08.861130",
+        "updated_at": "2025-09-16T03:30:11.723636"
+      }
+    ],
+    "memory_stats": {
+      "total_sessions": 1,
+      "active_sessions": 1,
+      "persisted_sessions": 0,
+      "total_websocket_connections": 0,
+      "sessions_with_connections": 0
+    },
+    "total": 1
+  },
+  "message": "Active memory sessions retrieved successfully",
+  "source": "memory"
+}
+
+6. GET /memory/stats
+
+Response Body :
+{
+  "success": true,
+  "data": {
+    "total_sessions": 1,
+    "active_sessions": 1,
+    "persisted_sessions": 0,
+    "total_websocket_connections": 0,
+    "sessions_with_connections": 0
+  },
+  "message": "Memory statistics retrieved successfully"
+}
+
+7. POST /transcript/{surah_id}/{ayah}
+
+Parameters : 
+- surah_id : 36
+- ayah : int 82
+
+Request Body : 
+{
+  "transcript": "إنما أمره إذا أراد شيئا أن يقول له كن فيكون",
+  "surah_id": 36,
+  "ayah": 82
+}
+
+Response Body : 
+{
+  "success": true,
+  "results": [
+    {
+      "position": 0,
+      "expected": "اِنَّمَآ",
+      "spoken": "انما",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 1,
+      "expected": "اَمْرُهٗٓ",
+      "spoken": "امره",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 2,
+      "expected": "اِذَآ",
+      "spoken": "اذا",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 3,
+      "expected": "اَرَادَ",
+      "spoken": "اراد",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 4,
+      "expected": "شَيْـًٔاۖ",
+      "spoken": "شييا",
+      "status": "matched",
+      "similarity_score": 0.75
+    },
+    {
+      "position": 5,
+      "expected": "اَنْ",
+      "spoken": "ان",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 6,
+      "expected": "يَّقُوْلَ",
+      "spoken": "يقول",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 7,
+      "expected": "لَهٗ",
+      "spoken": "له",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 8,
+      "expected": "كُنْ",
+      "spoken": "كن",
+      "status": "matched",
+      "similarity_score": 1
+    },
+    {
+      "position": 9,
+      "expected": "فَيَكُوْنُ",
+      "spoken": "فيكون",
+      "status": "matched",
+      "similarity_score": 1
+    }
+  ],
+  "summary": {
+    "matched": 10,
+    "mismatched": 0,
+    "skipped": 0,
+    "total": 10
+  },
+  "message": "Transcript compared with ayah 36:82"
+}
+
+8. POST /maintenance/cleanup
+
+Response Body : 
+"string"
+
+9. DELETE /memory/session/{session_id}
+
+Parameters : 
+- session_id : string (required)
+
+Response Body : 
+"string"

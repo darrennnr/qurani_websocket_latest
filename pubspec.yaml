@@ -1,0 +1,65 @@
+name: vosk_stt
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.4.0
+  cached_network_image: ^3.4.1
+  flutter_html: ^3.0.0
+  flutter_dotenv: ^5.2.1
+  shared_preferences: ^2.5.3
+  intl: ^0.20.2
+  supabase_flutter: ^2.9.1
+  speech_to_text: ^7.1.0
+  permission_handler: ^12.0.1
+  flutter_sound: ^9.28.0
+  vosk_flutter: ^0.3.48
+  path_provider: ^2.1.5
+  device_info_plus: ^11.5.0
+  archive: ^4.0.7
+  mic_stream: ^0.7.2
+  connectivity_plus: ^7.0.0
+  web_socket_channel: ^3.0.3
+  dio: ^5.9.0
+
+dependency_overrides:
+  speech_to_text: 7.1.0
+  permission_handler: ^12.0.1
+  http: ^1.4.0
+  archive: ^4.0.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/models/vosk-model-ar-mgb2-0.4.zip
+    - assets/images/headerquran/headerquran.png
+
+  fonts:
+    - family: Uthmanic
+      fonts:
+        - asset: assets/fonts/Uthmanic.otf
+
+    - family: UthmanTN
+      fonts:
+        - asset: assets/fonts/UthmanTN_v2-0.ttf
+        
+    - family: 110BesmellahNormal
+      fonts:
+        - asset: assets/fonts/110BesmellahNormal.ttf
+
+    - family: KFGQPC
+      fonts:
+        - asset: assets\fonts\KFGQPCUthmanicScriptHAFSRegular.otf
