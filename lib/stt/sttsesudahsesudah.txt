@@ -17,6 +17,7 @@ import 'package:archive/archive.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 import 'dart:math' as math;
+import '/stt/services/mushaf_engine_layout.dart';
 
 class VoskSTTCorrectionPage extends StatefulWidget {
   final int suratId;
@@ -57,8 +58,12 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
   // ==================== FIXED API CONFIGURATki8uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuION ====================
   static const String API_BASE_URL = 'https://3c675da91914.ngrok-free.app';
   static const String WEBSOCKET_URL = 'wss://3c675da91914.ngrok-free.app/ws';
-  static const Duration _apiTimeout = Duration(seconds: 20); // Diperpanjang dari 10s
-  static const Duration _websocketTimeout = Duration(seconds: 15); // Diperpanjang dari 10s
+  static const Duration _apiTimeout = Duration(
+    seconds: 20,
+  ); // Diperpanjang dari 10s
+  static const Duration _websocketTimeout = Duration(
+    seconds: 15,
+  ); // Diperpanjang dari 10s
   static const Duration _connectionRetryDelay = Duration(seconds: 3);
   static const int _maxRetryAttempts = 5; // Increased retry attempts
 
@@ -114,7 +119,12 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
   List<AyatData> _currentPageAyats = [];
   bool _showAdvancedStats = false;
   bool _isUIVisible = true; // ← TAMBAHKAN BARIS INI
-  
+
+  // TAMBAH PROPERTIES INI:
+  MushafRenderer? _mushafRenderer;
+  List<LineBreak> _currentPageLayout = [];
+  bool _isLayoutCalculating = false;
+  double _currentFontSize = MushafRenderingConstants.BASE_FONT_SIZE;
 
   // Surah info
   String _suratInfo = '';
@@ -211,7 +221,9 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
       // PERBAIKAN: Enhanced headers dan timeout
       final response = await http
           .post(
-            Uri.parse('$API_BASE_URL/live/start/${widget.suratId}/$_currentAyatNumber'),
+            Uri.parse(
+              '$API_BASE_URL/live/start/${widget.suratId}/$_currentAyatNumber',
+            ),
             headers: {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
@@ -229,7 +241,7 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
       // PERBAIKAN: Better status code handling
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final responseData = jsonDecode(response.body);
-        
+
         // Validate response structure sesuai API docs
         if (responseData['sessionId'] != null) {
           _activeSessionId = responseData['sessionId'];
@@ -240,7 +252,7 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
 
           // Initialize WebSocket setelah session berhasil
           await _initializeWebSocketConnection();
-          
+
           setState(() {});
           _showSnackBar('API Session Started', SnackBarType.success);
         } else {
@@ -252,20 +264,25 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
     } on TimeoutException catch (e) {
       _detailedLog('API_SESSION', 'TIMEOUT ERROR: $e');
       _logAPICall('POST', '/live/start', 0, 'Timeout: $e');
-      
+
       // PERBAIKAN: Retry logic untuk timeout
       if (_reconnectAttempts < _maxRetryAttempts) {
         _detailedLog('API_SESSION', 'Retrying session initialization...');
         _reconnectAttempts++;
-        
+
         await Future.delayed(_connectionRetryDelay);
         await _initializeAPISession(); // Retry
         return;
       }
-      
+
       _isSessionActive = false;
-      _showSnackBar('Connection timeout. Check your internet.', SnackBarType.error);
-      throw Exception('Session initialization timeout after $_maxRetryAttempts attempts');
+      _showSnackBar(
+        'Connection timeout. Check your internet.',
+        SnackBarType.error,
+      );
+      throw Exception(
+        'Session initialization timeout after $_maxRetryAttempts attempts',
+      );
     } catch (e) {
       _detailedLog('API_SESSION', 'ERROR: $e');
       _logAPICall('POST', '/live/start', 0, 'Error: $e');
@@ -276,6 +293,7 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
       rethrow;
     }
   }
+
   // Handle session update
   void _handleSessionUpdate(Map<String, dynamic> data) {
     _detailedLog('WEBSOCKET', 'Session update received');
@@ -294,7 +312,7 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
 
   // ==================== FIXED WEBSOCKET CONNECTION ====================
 
-Future<void> _initializeWebSocketConnection() async {
+  Future<void> _initializeWebSocketConnection() async {
     if (_activeSessionId == null) {
       _detailedLog('WEBSOCKET', 'ERROR: No active session ID');
       return;
@@ -309,12 +327,12 @@ Future<void> _initializeWebSocketConnection() async {
         'wss://3c675da91914.ngrok-free.app/live/ws/$_activeSessionId', // GANTI URL
         'wss://3c675da91914.ngrok-free.app/ws/live/$_activeSessionId', // GANTI URL
       ];
-      
+
       String wsUrl = possibleEndpoints[0]; // Coba endpoint pertama dulu
       _detailedLog('WEBSOCKET', 'Connecting to: $wsUrl');
 
       await _closeWebSocketConnection();
-  
+
       // PERBAIKAN: Enhanced WebSocket connection dengan proper headers
       final socket = await WebSocket.connect(
         wsUrl,
@@ -341,20 +359,20 @@ Future<void> _initializeWebSocketConnection() async {
       _webSocketChannel!.stream.listen(
         (data) {
           _connectionTimeoutTimer?.cancel();
-          
+
           if (!_isWebSocketConnected) {
             _isWebSocketConnected = true;
             _reconnectAttempts = 0;
             _detailedLog('WEBSOCKET', 'Connected successfully');
             _startHeartbeat();
-            
+
             // Send initial handshake
             _sendWebSocketMessage({
               'type': 'connect',
               'session_id': _activeSessionId,
               'client_type': 'flutter_stt',
             });
-            
+
             if (mounted) setState(() {});
           }
 
@@ -370,7 +388,7 @@ Future<void> _initializeWebSocketConnection() async {
           _detailedLog('WEBSOCKET', 'Connection closed');
           _isWebSocketConnected = false;
           if (mounted) setState(() {});
-          
+
           // Auto-reconnect logic
           if (_isSessionActive && _reconnectAttempts < _maxRetryAttempts) {
             _attemptReconnection();
@@ -378,7 +396,6 @@ Future<void> _initializeWebSocketConnection() async {
         },
         cancelOnError: false,
       );
-
     } catch (e) {
       _connectionTimeoutTimer?.cancel();
       _detailedLog('WEBSOCKET', 'Connection failed: $e');
@@ -388,8 +405,7 @@ Future<void> _initializeWebSocketConnection() async {
     }
   }
 
-
-void _handleWebSocketMessage(dynamic data) {
+  void _handleWebSocketMessage(dynamic data) {
     try {
       final messageData = jsonDecode(data.toString());
       _detailedLog('WEBSOCKET_RECEIVE', 'Message: ${jsonEncode(messageData)}');
@@ -428,7 +444,10 @@ void _handleWebSocketMessage(dynamic data) {
           break;
 
         default:
-          _detailedLog('WEBSOCKET_RECEIVE', 'Unknown message type: $messageType');
+          _detailedLog(
+            'WEBSOCKET_RECEIVE',
+            'Unknown message type: $messageType',
+          );
       }
     } catch (e) {
       _detailedLog('WEBSOCKET_RECEIVE', 'Error parsing message: $e');
@@ -771,13 +790,14 @@ void _handleWebSocketMessage(dynamic data) {
   }
 
   // REPLACE method: _sendFinalTranscript()
-void _sendFinalTranscript(String transcript) {
+  void _sendFinalTranscript(String transcript) {
     if (transcript.trim().isEmpty) return;
 
     final normalizedTranscript = _normalizeTranscript(transcript);
     final normalizedLast = _normalizeTranscript(_lastSentTranscript);
 
-    if (normalizedTranscript == normalizedLast || normalizedTranscript.length < 3) {
+    if (normalizedTranscript == normalizedLast ||
+        normalizedTranscript.length < 3) {
       _detailedLog('TRANSCRIPT_SEND', 'Skipping duplicate: "$transcript"');
       return;
     }
@@ -795,10 +815,9 @@ void _sendFinalTranscript(String transcript) {
         'ayah': _currentAyatNumber,
         'timestamp': DateTime.now().toIso8601String(),
       });
-      
+
       _lastSentTranscript = transcript;
       _totalTranscriptsSent++;
-      
     } else {
       // PERBAIKAN: HTTP fallback sesuai API docs
       _sendTranscriptViaHTTP(transcript);
@@ -808,8 +827,11 @@ void _sendFinalTranscript(String transcript) {
   // TAMBAH method baru untuk HTTP fallback:
   Future<void> _sendTranscriptViaHTTP(String transcript) async {
     try {
-      _detailedLog('HTTP_FALLBACK', 'Sending transcript via HTTP: "$transcript"');
-      
+      _detailedLog(
+        'HTTP_FALLBACK',
+        'Sending transcript via HTTP: "$transcript"',
+      );
+
       final requestBody = {
         'transcript': transcript,
         'surah_id': widget.suratId,
@@ -818,7 +840,9 @@ void _sendFinalTranscript(String transcript) {
 
       final response = await http
           .post(
-            Uri.parse('$API_BASE_URL/transcript/${widget.suratId}/$_currentAyatNumber'),
+            Uri.parse(
+              '$API_BASE_URL/transcript/${widget.suratId}/$_currentAyatNumber',
+            ),
             headers: {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
@@ -834,7 +858,7 @@ void _sendFinalTranscript(String transcript) {
         _successfulAPIResponses++;
         _lastSentTranscript = transcript;
         _totalTranscriptsSent++;
-        
+
         _detailedLog('HTTP_FALLBACK', 'Success: ${response.body}');
         _logAPICall('POST', '/transcript', response.statusCode, 'Success');
       } else {
@@ -1000,8 +1024,10 @@ void _sendFinalTranscript(String transcript) {
 
   String _getConnectionStatusText() {
     if (!_isSessionActive) return 'Session Inactive';
-    if (_reconnectAttempts > 0) return 'Reconnecting... (${_reconnectAttempts}/$_maxRetryAttempts)';
-    if (!_isWebSocketConnected) return 'WebSocket Connecting... (HTTP Fallback Active)';
+    if (_reconnectAttempts > 0)
+      return 'Reconnecting... (${_reconnectAttempts}/$_maxRetryAttempts)';
+    if (!_isWebSocketConnected)
+      return 'WebSocket Connecting... (HTTP Fallback Active)';
     if (!_isListening) return 'Ready (WebSocket Connected)';
     return 'Listening (WebSocket Live)';
   }
@@ -1401,6 +1427,9 @@ void _sendFinalTranscript(String transcript) {
     _cleanupVoskResources();
 
     super.dispose();
+    // TAMBAH DI AKHIR METHOD dispose():
+    _mushafRenderer = null;
+    _currentPageLayout.clear();
   }
 
   Future<void> _cleanupVoskResources() async {
@@ -1422,7 +1451,7 @@ void _sendFinalTranscript(String transcript) {
     }
   }
 
-Future<void> _endAPISession() async {
+  Future<void> _endAPISession() async {
     if (!_isSessionActive || _activeSessionId == null) {
       _detailedLog('API_SESSION', 'No active session to end');
       return;
@@ -1447,8 +1476,16 @@ Future<void> _endAPISession() async {
         _detailedLog('API_SESSION', 'Session ended successfully');
         _logAPICall('POST', '/live/end', response.statusCode, 'Success');
       } else {
-        _detailedLog('API_SESSION', 'End session error: ${response.statusCode} - ${response.body}');
-        _logAPICall('POST', '/live/end', response.statusCode, 'Error: ${response.body}');
+        _detailedLog(
+          'API_SESSION',
+          'End session error: ${response.statusCode} - ${response.body}',
+        );
+        _logAPICall(
+          'POST',
+          '/live/end',
+          response.statusCode,
+          'Error: ${response.body}',
+        );
       }
     } catch (e) {
       _detailedLog('API_SESSION', 'Error ending session: $e');
@@ -1906,6 +1943,7 @@ Future<void> _endAPISession() async {
     _log('=== API-INTEGRATED STT INITIALIZATION STARTED ===');
     _initializeAnimations();
     _initializeStreams();
+    _mushafRenderer = MushafRenderer();
     _initializeApp();
     _sessionStartTime = DateTime.now();
   }
@@ -2194,11 +2232,16 @@ Future<void> _endAPISession() async {
       return;
     }
 
+    setState(() {
+      _isLayoutCalculating = true;
+    });
+
     try {
+      // Load ayat data untuk halaman
       final response = await _supabase
           .from('m10_quran_ayah')
           .select(
-            'surah_id, ayah, arabic, no_tashkeel, transliteration, words_array_nt, page, juz, quarter_hizb',
+            'surah_id, ayah, arabic, no_tashkeel, transliteration, words_array, words_array_nt, page, juz, quarter_hizb, line_start, line_end',
           )
           .eq('page', _currentPage)
           .order('surah_id', ascending: true)
@@ -2207,12 +2250,29 @@ Future<void> _endAPISession() async {
       _currentPageAyats = response
           .map((data) => AyatData.fromJson(data))
           .toList();
+
+      // ALGORITMA BARU: Calculate layout menggunakan DP engine
+      // ALGORITMA BARU: Calculate layout menggunakan DP engine
+      if (_mushafRenderer != null && _currentPageAyats.isNotEmpty) {
+        _currentPageLayout = await _mushafRenderer!.layoutPage(
+          _currentPageAyats,
+        );
+        _log(
+          'MUSHAF_LAYOUT: Calculated ${_currentPageLayout.length} lines for page $_currentPage',
+        );
+      }
+
       _log(
         'DATA: Loaded ${_currentPageAyats.length} ayats for page $_currentPage',
       );
     } catch (e) {
       _log('DATA: Error loading page ayats - $e');
       _currentPageAyats = [];
+      _currentPageLayout = [];
+    } finally {
+      setState(() {
+        _isLayoutCalculating = false;
+      });
     }
   }
 
@@ -2259,136 +2319,148 @@ Future<void> _endAPISession() async {
 
   // ==================== UI BUILD METHODS ====================
 
-@override
-Widget build(BuildContext context) {
-  return Scaffold(
-    backgroundColor: backgroundColor,
-    // MODIFIKASI: AppBar hanya tampil jika _isUIVisible = true
-    appBar: _isUIVisible ? _buildEnhancedAppBar() : null,
-    body: _isLoading
-        ? _buildEnhancedLoadingWidget()
-        : _errorMessage.isNotEmpty && !_isListening
-        ? _buildEnhancedErrorWidget()
-        : GestureDetector(
-            // TAMBAHAN: GestureDetector untuk mendeteksi tap
-            onTap: () {
-              setState(() {
-                _isUIVisible = !_isUIVisible; // Toggle UI visibility
-              });
-            },
-            child: Column(
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: backgroundColor,
+      // MODIFIKASI: AppBar hanya tampil jika _isUIVisible = true
+      appBar: _isUIVisible ? _buildEnhancedAppBar() : null,
+      body: _isLoading
+          ? _buildEnhancedLoadingWidget()
+          : _errorMessage.isNotEmpty && !_isListening
+          ? _buildEnhancedErrorWidget()
+          : GestureDetector(
+              // TAMBAHAN: GestureDetector untuk mendeteksi tap
+              onTap: () {
+                setState(() {
+                  _isUIVisible = !_isUIVisible; // Toggle UI visibility
+                });
+              },
+              child: Column(
+                children: [
+                  Expanded(child: _buildEnhancedMainContent()),
+                  if (_showLogs && _isUIVisible) _buildEnhancedLogsPanel(),
+                ],
+              ),
+            ),
+    );
+  }
+
+  PreferredSizeWidget _buildEnhancedAppBar() {
+    // TAMBAHAN: Animated opacity untuk smooth transition
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(kToolbarHeight),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: _isUIVisible ? 1.0 : 0.0,
+        child: AppBar(
+          backgroundColor: primaryColor,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          title: Padding(
+            padding: const EdgeInsets.only(left: 15),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Expanded(child: _buildEnhancedMainContent()),
-                if (_showLogs && _isUIVisible) _buildEnhancedLogsPanel(),
+                const Icon(Icons.menu, size: 24, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'Qurani Hafidz',
+                        style: TextStyle(fontSize: 16, height: 1.2),
+                      ),
+                      Text(
+                        'Surat Yasin 36 - 83 Ayat',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w400,
+                          height: 1.2,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-  );
-}
-
-PreferredSizeWidget _buildEnhancedAppBar() {
-  // TAMBAHAN: Animated opacity untuk smooth transition
-  return PreferredSize(
-    preferredSize: const Size.fromHeight(kToolbarHeight),
-    child: AnimatedOpacity(
-      duration: const Duration(milliseconds: 200),
-      opacity: _isUIVisible ? 1.0 : 0.0,
-      child: AppBar(
-        backgroundColor: primaryColor,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: Padding(
-          padding: const EdgeInsets.only(left: 15),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const Icon(Icons.menu, size: 24, color: Colors.white),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Text(
-                      'Qurani Hafidz',
-                      style: TextStyle(fontSize: 16, height: 1.2),
-                    ),
-                    Text(
-                      'Surat Yasin 36 - 83 Ayat',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w400,
-                        height: 1.2,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
+          titleSpacing: 0,
+          actions: [
+            // API Status indicator
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              child: Icon(
+                _isWebSocketConnected ? Icons.wifi : Icons.wifi_off,
+                color: _isWebSocketConnected
+                    ? Colors.greenAccent
+                    : Colors.redAccent,
+                size: 20,
               ),
-            ],
-          ),
+            ),
+
+            // Toggle mode button
+            IconButton(
+              icon: Icon(
+                _isQuranMode ? Icons.menu_book : Icons.view_list,
+                size: 20,
+              ),
+              onPressed: () async {
+                setState(() {
+                  _isQuranMode = !_isQuranMode;
+                });
+                await _loadCurrentPageAyats();
+              },
+              tooltip: _isQuranMode
+                  ? 'Switch to List Mode'
+                  : 'Switch to Mushaf Mode',
+            ),
+
+            // Hide/show button
+            IconButton(
+              icon: Icon(
+                _hideUnreadAyat ? Icons.visibility : Icons.visibility_off,
+                size: 20,
+              ),
+              onPressed: () {
+                setState(() {
+                  _hideUnreadAyat = !_hideUnreadAyat;
+                });
+              },
+              tooltip: _hideUnreadAyat ? 'Show All Text' : 'Hide Unread',
+            ),
+
+            PopupMenuButton<String>(
+              onSelected: _handleMenuAction,
+              iconSize: 20,
+              itemBuilder: (BuildContext context) => [
+                const PopupMenuItem(value: 'logs', child: Text('Debug Logs')),
+                const PopupMenuItem(
+                  value: 'api_status',
+                  child: Text('API Status'),
+                ),
+                const PopupMenuItem(
+                  value: 'settings',
+                  child: Text('STT Settings'),
+                ),
+                const PopupMenuItem(
+                  value: 'reset',
+                  child: Text('Reset Session'),
+                ),
+                const PopupMenuItem(
+                  value: 'export',
+                  child: Text('Export Session'),
+                ),
+              ],
+            ),
+          ],
         ),
-        titleSpacing: 0,
-        actions: [
-          // API Status indicator
-          Container(
-            margin: const EdgeInsets.only(right: 8),
-            child: Icon(
-              _isWebSocketConnected ? Icons.wifi : Icons.wifi_off,
-              color: _isWebSocketConnected
-                  ? Colors.greenAccent
-                  : Colors.redAccent,
-              size: 20,
-            ),
-          ),
-
-          // Toggle mode button
-          IconButton(
-            icon: Icon(
-              _isQuranMode ? Icons.menu_book : Icons.view_list,
-              size: 20,
-            ),
-            onPressed: () async {
-              setState(() {
-                _isQuranMode = !_isQuranMode;
-              });
-              await _loadCurrentPageAyats();
-            },
-            tooltip: _isQuranMode
-                ? 'Switch to List Mode'
-                : 'Switch to Mushaf Mode',
-          ),
-
-          // Hide/show button
-          IconButton(
-            icon: Icon(
-              _hideUnreadAyat ? Icons.visibility : Icons.visibility_off,
-              size: 20,
-            ),
-            onPressed: () {
-              setState(() {
-                _hideUnreadAyat = !_hideUnreadAyat;
-              });
-            },
-            tooltip: _hideUnreadAyat ? 'Show All Text' : 'Hide Unread',
-          ),
-
-          PopupMenuButton<String>(
-            onSelected: _handleMenuAction,
-            iconSize: 20,
-            itemBuilder: (BuildContext context) => [
-              const PopupMenuItem(value: 'logs', child: Text('Debug Logs')),
-              const PopupMenuItem(value: 'api_status', child: Text('API Status')),
-              const PopupMenuItem(value: 'settings', child: Text('STT Settings')),
-              const PopupMenuItem(value: 'reset', child: Text('Reset Session')),
-              const PopupMenuItem(value: 'export', child: Text('Export Session')),
-            ],
-          ),
-        ],
       ),
-    ),
-  );
-}
+    );
+  }
 
   void _handleMenuAction(String action) {
     switch (action) {
@@ -2410,44 +2482,35 @@ PreferredSizeWidget _buildEnhancedAppBar() {
     }
   }
 
-Widget _buildEnhancedMainContent() {
-  return Stack(
-    children: [
-      Column(
-        children: [
-          // MODIFIKASI: Real-time Status Panel hanya tampil jika UI visible
-          if ((_isListening || _showAdvancedStats) && _isUIVisible) 
-            _buildRealtimeStatusPanel(),
+  Widget _buildEnhancedMainContent() {
+    return Stack(
+      children: [
+        Column(
+          children: [
+            // MODIFIKASI: Real-time Status Panel hanya tampil jika UI visible
+            if ((_isListening || _showAdvancedStats) && _isUIVisible)
+              _buildRealtimeStatusPanel(),
 
-          // MODIFIKASI: API Status panel hanya tampil jika UI visible
-          if (_showAdvancedStats && _isUIVisible) 
-            _buildAPIStatsPanel(),
+            // MODIFIKASI: API Status panel hanya tampil jika UI visible
+            if (_showAdvancedStats && _isUIVisible) _buildAPIStatsPanel(),
 
-          // Quran text tetap di tempatnya
-Expanded(
-  flex: 4,
-  child: Padding(
-    // MODIFIKASI: Padding bottom hanya diterapkan jika UI visible
-    padding: EdgeInsets.only(bottom: _isUIVisible ? 80 : 0),
-    child: Center(
-      child: _buildEnhancedQuranText(),
-    ),
-  ),
-),
-
-        ],
-      ),
-      // MODIFIKASI: Bottom bar hanya tampil jika UI visible
-      if (_isUIVisible)
-        Positioned(
-          bottom: 0, 
-          left: 0, 
-          right: 0, 
-          child: _buildBottomBar()
+            // Quran text tetap di tempatnya
+            Expanded(
+              flex: 4,
+              child: Padding(
+                // MODIFIKASI: Padding bottom hanya diterapkan jika UI visible
+                padding: EdgeInsets.only(bottom: _isUIVisible ? 80 : 0),
+                child: Center(child: _buildEnhancedQuranText()),
+              ),
+            ),
+          ],
         ),
-    ],
-  );
-}
+        // MODIFIKASI: Bottom bar hanya tampil jika UI visible
+        if (_isUIVisible)
+          Positioned(bottom: 0, left: 0, right: 0, child: _buildBottomBar()),
+      ],
+    );
+  }
 
   Widget _buildBottomBar() {
     return Container(
@@ -2748,18 +2811,30 @@ Expanded(
     return GestureDetector(
       onHorizontalDragEnd: (DragEndDetails details) {
         if (details.velocity.pixelsPerSecond.dx > 300) {
-          // Swipe kanan - ke halaman sebelumnya
           if (_currentPage > 1) {
-            _navigateToPage(_currentPage + 1);
+            _navigateToPage(_currentPage - 1); // Perbaiki arah swipe
           }
         } else if (details.velocity.pixelsPerSecond.dx < -300) {
-          // Swipe kiri - ke halaman berikutnya
           if (_currentPage < 604) {
-            _navigateToPage(_currentPage - 1);
+            _navigateToPage(_currentPage + 1); // Perbaiki arah swipe
           }
         }
       },
-      child: _currentPageAyats.isEmpty
+      child: _isLayoutCalculating
+          ? const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 8),
+                  Text(
+                    'Calculating mushaf layout...',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
+            )
+          : _currentPageAyats.isEmpty
           ? const Center(
               child: Text(
                 'No ayats found for this page',
@@ -2769,15 +2844,17 @@ Expanded(
           : SingleChildScrollView(
               padding: const EdgeInsets.all(0),
               child: Container(
-                decoration: BoxDecoration(
+                decoration: const BoxDecoration(
                   color: Color.fromARGB(255, 255, 255, 255),
                 ),
-                padding: const EdgeInsets.all(16),
+                width: MushafRenderingConstants.PAGE_WIDTH,
+                height: MushafRenderingConstants.PAGE_HEIGHT,
                 child: Stack(
                   children: [
+                    // Header info
                     Positioned(
-                      top: 0,
-                      left: 0,
+                      top: 8,
+                      left: 8,
                       child: Text(
                         'Juz ${_currentPageAyats.isNotEmpty ? _currentPageAyats.first.juz : '1'}',
                         style: TextStyle(
@@ -2788,8 +2865,8 @@ Expanded(
                       ),
                     ),
                     Positioned(
-                      top: 0,
-                      right: 0,
+                      top: 8,
+                      right: 8,
                       child: Text(
                         'Page $_currentPage',
                         style: TextStyle(
@@ -2799,14 +2876,128 @@ Expanded(
                         ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 18),
-                      child: _buildContinuousQuranText(),
+
+                    // MAIN CONTENT: Deterministik mushaf layout
+                    Positioned(
+                      top: 24,
+                      left: MushafRenderingConstants.MARGIN_LEFT,
+                      right: MushafRenderingConstants.MARGIN_RIGHT,
+                      child: _buildDeterministicMushafLayout(),
                     ),
                   ],
                 ),
               ),
             ),
+    );
+  }
+
+  Widget _buildDeterministicMushafLayout() {
+    if (_currentPageLayout.isEmpty) {
+      // Fallback ke layout sederhana jika DP belum selesai
+      return _buildFallbackLayout();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: _currentPageLayout.asMap().entries.map((entry) {
+        final lineIndex = entry.key;
+        final lineBreak = entry.value;
+
+        return Container(
+          height: MushafRenderingConstants.LINE_HEIGHT,
+          width: MushafRenderingConstants.TARGET_LINE_WIDTH,
+          alignment: Alignment.centerRight,
+          child: _buildJustifiedLine(lineBreak, lineIndex + 1),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildJustifiedLine(LineBreak lineBreak, int lineNumber) {
+    // Build line dengan perfect justification menggunakan kashida
+    final words = _extractWordsFromLineBreak(lineBreak);
+
+    return RichText(
+      textAlign: TextAlign.justify,
+      textDirection: TextDirection.rtl,
+      text: TextSpan(
+        children: _buildJustifiedSpans(words, lineBreak.kashidaInsertions),
+      ),
+    );
+  }
+
+  List<String> _extractWordsFromLineBreak(LineBreak lineBreak) {
+    // Extract words dari current page berdasarkan line break indices
+    final List<String> lineWords = [];
+
+    int wordIndex = 0;
+    for (final ayat in _currentPageAyats) {
+      for (final word in ayat.wordsArray) {
+        if (wordIndex >= lineBreak.startWordIndex &&
+            wordIndex < lineBreak.endWordIndex) {
+          lineWords.add(word);
+        }
+        wordIndex++;
+      }
+    }
+
+    return lineWords;
+  }
+
+  List<TextSpan> _buildJustifiedSpans(
+    List<String> words,
+    List<KashidaInsertion> insertions,
+  ) {
+    final spans = <TextSpan>[];
+
+    for (int i = 0; i < words.length; i++) {
+      String word = words[i];
+
+      // Apply kashida insertions untuk word ini
+      final relevantInsertions = insertions
+          .where((ins) => ins.wordIndex == i)
+          .toList();
+      for (final insertion in relevantInsertions) {
+        // Insert kashida (ـ) pada posisi yang ditentukan
+        final kashidaChar = 'ـ' * insertion.count;
+        if (insertion.slotIndex < word.length) {
+          word =
+              word.substring(0, insertion.slotIndex + 1) +
+              kashidaChar +
+              word.substring(insertion.slotIndex + 1);
+        }
+      }
+
+      spans.add(
+        TextSpan(
+          text: '$word ',
+          style: TextStyle(
+            fontSize: _currentFontSize,
+            fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+            color: Colors.black87,
+            height: 1.0,
+          ),
+        ),
+      );
+    }
+
+    return spans;
+  }
+
+  Widget _buildFallbackLayout() {
+    // Layout fallback sederhana sementara DP engine bekerja
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: List.generate(15, (lineIndex) {
+        return Container(
+          height: MushafRenderingConstants.LINE_HEIGHT,
+          alignment: Alignment.centerRight,
+          child: Text(
+            'Loading line ${lineIndex + 1}...',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade400),
+          ),
+        );
+      }),
     );
   }
 
@@ -3024,8 +3215,27 @@ Expanded(
   Future<void> _navigateToPage(int newPage) async {
     setState(() {
       _currentPage = newPage;
+      _isLayoutCalculating = true;
     });
-    await _loadCurrentPageAyats();
+
+    await _loadCurrentPageAyats(); // Ini sudah include calculation layout DP
+
+    setState(() {
+      _isLayoutCalculating = false;
+    });
+  }
+
+  void _testMushafLayout() {
+    _log('MUSHAF_TEST: Current page: $_currentPage');
+    _log('MUSHAF_TEST: Ayat count: ${_currentPageAyats.length}');
+    _log('MUSHAF_TEST: Line breaks: ${_currentPageLayout.length}');
+
+    for (int i = 0; i < _currentPageLayout.length; i++) {
+      final line = _currentPageLayout[i];
+      _log(
+        'MUSHAF_TEST: Line ${i + 1}: ${line.startWordIndex}-${line.endWordIndex}, kashida: ${line.kashidaInsertions.length}',
+      );
+    }
   }
 
   Widget _buildEnhancedAllAyatDisplay() {
@@ -3805,10 +4015,13 @@ class AyatData {
   final String arabic;
   final String noTashkeel;
   final String transliteration;
-  final List<String> wordsArrayNt;
+  final List<String> wordsArray; // TAMBAH: words_array dengan tashkeel
+  final List<String> wordsArrayNt; // SUDAH ADA: words_array_nt tanpa tashkeel
   final int page;
   final int juz;
   final double quarterHizb;
+  final int? line_start; // TAMBAH: constraint baris mulai
+  final int? line_end; // TAMBAH: constraint baris akhir
 
   AyatData({
     required this.surah_id,
@@ -3816,10 +4029,13 @@ class AyatData {
     required this.arabic,
     required this.noTashkeel,
     required this.transliteration,
+    required this.wordsArray, // TAMBAH
     required this.wordsArrayNt,
     required this.page,
     required this.juz,
     required this.quarterHizb,
+    this.line_start, // TAMBAH
+    this.line_end, // TAMBAH
   });
 
   factory AyatData.fromJson(Map<String, dynamic> json) {
@@ -3829,10 +4045,14 @@ class AyatData {
       arabic: json['arabic'] ?? '',
       noTashkeel: json['no_tashkeel'] ?? '',
       transliteration: json['transliteration'] ?? '',
+      wordsArray:
+          (json['words_array'] as List?)?.cast<String>() ?? [], // TAMBAH
       wordsArrayNt: (json['words_array_nt'] as List?)?.cast<String>() ?? [],
       page: json['page'] ?? 1,
       juz: json['juz'] ?? 1,
       quarterHizb: (json['quarter_hizb'] ?? 0.0).toDouble(),
+      line_start: json['line_start'], // TAMBAH
+      line_end: json['line_end'], // TAMBAH
     );
   }
 }

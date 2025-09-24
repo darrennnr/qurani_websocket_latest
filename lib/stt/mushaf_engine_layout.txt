@@ -1,0 +1,541 @@
+// ==================== MUSHAF LAYOUT ENGINE - DP ALGORITHM ====================
+
+import 'dart:ui' as ui;
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:vosk_stt/stt/main/stt.dart';
+
+// 1. KONSTANTA RENDERING DETERMINISTIK
+class MushafRenderingConstants {
+  static const double PAGE_WIDTH = 350.0;           // Lebar halaman tetap
+  static const double PAGE_HEIGHT = 500.0;          // Tinggi halaman tetap
+  static const double LINE_HEIGHT = 32.0;           // Tinggi baris tetap
+  static const int LINES_PER_PAGE = 15;             // 15 baris per halaman
+  static const double BASE_FONT_SIZE = 24.0;        // Ukuran font dasar
+  static const double KASHIDA_AVG_WIDTH = 8.0;      // Lebar rata-rata kashida
+  static const int MAX_KASHIDA_PER_SLOT = 3;        // Max kashida per slot
+  static const double MARGIN_LEFT = 16.0;
+  static const double MARGIN_RIGHT = 16.0;
+  static const double TARGET_LINE_WIDTH = PAGE_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
+  
+  // Fallback parameters
+  static const double FONT_SIZE_STEP = 1.0;         // Step pengurangan font
+  static const double MIN_FONT_SIZE = 18.0;         // Minimum font size
+}
+
+// 2. DATA STRUCTURES UNTUK DP
+class WordMetrics {
+  final String word;
+  final double width;                    // Lebar dasar tanpa kashida
+  final List<KashidaSlot> kashidaSlots; // Slot-slot kashida dalam kata
+  final int ayahId;                     // ID ayat untuk constraint
+  
+  WordMetrics({
+    required this.word,
+    required this.width,
+    required this.kashidaSlots,
+    required this.ayahId,
+  });
+  
+  double get maxPossibleWidth => width + 
+    (kashidaSlots.length * MushafRenderingConstants.MAX_KASHIDA_PER_SLOT * 
+     MushafRenderingConstants.KASHIDA_AVG_WIDTH);
+}
+
+class KashidaSlot {
+  final int position;        // Posisi dalam kata
+  final double priority;     // Prioritas estetik (0.0-1.0)
+  final bool isValid;        // Apakah slot valid untuk kashida
+  
+  KashidaSlot({
+    required this.position,
+    required this.priority,
+    required this.isValid,
+  });
+}
+
+class LineConstraint {
+  final int ayahId;
+  final int lineStart;  // Baris mulai ayat (1-15)
+  final int lineEnd;    // Baris akhir ayat (1-15)
+  
+  LineConstraint({
+    required this.ayahId,
+    required this.lineStart, 
+    required this.lineEnd,
+  });
+}
+
+class DPState {
+  final double cost;
+  final int prevWordIndex;
+  final List<LineBreak> lineBreaks;
+  
+  DPState({
+    required this.cost,
+    required this.prevWordIndex,
+    required this.lineBreaks,
+  });
+}
+
+class LineBreak {
+  final int startWordIndex;
+  final int endWordIndex;
+  final List<KashidaInsertion> kashidaInsertions;
+  final double actualWidth;
+  
+  LineBreak({
+    required this.startWordIndex,
+    required this.endWordIndex,
+    required this.kashidaInsertions,
+    required this.actualWidth,
+  });
+}
+
+class KashidaInsertion {
+  final int wordIndex;
+  final int slotIndex;
+  final int count;  // Jumlah kashida yang disisipkan
+  
+  KashidaInsertion({
+    required this.wordIndex,
+    required this.slotIndex,
+    required this.count,
+  });
+}
+
+// 3. MUSHAF LAYOUT ENGINE
+class MushafLayoutEngine {
+  final double targetWidth = MushafRenderingConstants.TARGET_LINE_WIDTH;
+  final int targetLines = MushafRenderingConstants.LINES_PER_PAGE;
+  
+  // Cache untuk metrics
+  final Map<String, double> _widthCache = {};
+  final Map<String, List<KashidaSlot>> _kashidaCache = {};
+
+  // MAIN PIPELINE FUNCTION
+  Future<List<LineBreak>> layoutPage(List<AyatData> ayatList) async {
+    try {
+      // Step 1: Extract words dan constraints
+      final (words, constraints) = await _extractWordsAndConstraints(ayatList);
+      
+      // Step 2: Calculate word metrics dengan HarfBuzz-like shaping
+      final wordMetrics = await _calculateWordMetrics(words);
+      
+      // Step 3: Run Constrained DP
+      final result = await _runConstrainedDP(wordMetrics, constraints);
+      
+      return result;
+    } catch (e) {
+      print('Layout failed: $e');
+      // Fallback dengan font size lebih kecil
+      return await _fallbackLayout(ayatList);
+    }
+  }
+
+  // STEP 1: EXTRACT WORDS DAN CONSTRAINTS
+  Future<(List<String>, List<LineConstraint>)> _extractWordsAndConstraints(
+    List<AyatData> ayatList
+  ) async {
+    final List<String> allWords = [];
+    final List<LineConstraint> constraints = [];
+    
+    for (final ayat in ayatList) {
+      final startIndex = allWords.length;
+      
+      // Gunakan words_array (dengan tashkeel) untuk rendering
+      allWords.addAll(ayat.wordsArrayNt);
+      
+      // Tambah constraint jika ada line_start/line_end
+      if (ayat.line_start != null && ayat.line_end != null) {
+        constraints.add(LineConstraint(
+          ayahId: ayat.ayah,
+          lineStart: ayat.line_start!,
+          lineEnd: ayat.line_end!,
+        ));
+      }
+    }
+    
+    return (allWords, constraints);
+  }
+
+  // STEP 2: CALCULATE WORD METRICS (HarfBuzz-like)
+  Future<List<WordMetrics>> _calculateWordMetrics(List<String> words) async {
+    final List<WordMetrics> metrics = [];
+    
+    for (int i = 0; i < words.length; i++) {
+      final word = words[i];
+      
+      // Calculate base width (simulate HarfBuzz shaping)
+      final width = await _calculateWordWidth(word);
+      
+      // Detect kashida slots
+      final kashidaSlots = await _detectKashidaSlots(word);
+      
+      metrics.add(WordMetrics(
+        word: word,
+        width: width,
+        kashidaSlots: kashidaSlots,
+        ayahId: i, // Simplified - should map to actual ayah
+      ));
+    }
+    
+    return metrics;
+  }
+
+  // WORD WIDTH CALCULATION (simulasi HarfBuzz)
+  Future<double> _calculateWordWidth(String word) async {
+    if (_widthCache.containsKey(word)) {
+      return _widthCache[word]!;
+    }
+    
+    // Simulate proper Arabic shaping dan width calculation
+    final painter = TextPainter(
+      text: TextSpan(
+        text: word,
+        style: const TextStyle(
+          fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+          fontSize: MushafRenderingConstants.BASE_FONT_SIZE,
+        ),
+      ),
+      textDirection: TextDirection.rtl,
+    );
+    
+    painter.layout();
+    final width = painter.width;
+    
+    _widthCache[word] = width;
+    painter.dispose();
+    
+    return width;
+  }
+
+  // KASHIDA SLOT DETECTION
+  Future<List<KashidaSlot>> _detectKashidaSlots(String word) async {
+    if (_kashidaCache.containsKey(word)) {
+      return _kashidaCache[word]!;
+    }
+    
+    final slots = <KashidaSlot>[];
+    
+    // Simplified kashida detection - in real implementation,
+    // this would use proper Arabic script analysis
+    for (int i = 0; i < word.length - 1; i++) {
+      final current = word.codeUnitAt(i);
+      final next = word.codeUnitAt(i + 1);
+      
+      // Check if current character can connect to next (simplified)
+      if (_canInsertKashida(current, next)) {
+        slots.add(KashidaSlot(
+          position: i,
+          priority: _calculateKashidaPriority(word, i),
+          isValid: true,
+        ));
+      }
+    }
+    
+    _kashidaCache[word] = slots;
+    return slots;
+  }
+
+  bool _canInsertKashida(int current, int next) {
+    // Simplified - real implementation needs comprehensive Arabic rules
+    // Check if characters are Arabic letters that can be connected
+    return (current >= 0x0600 && current <= 0x06FF) &&
+           (next >= 0x0600 && next <= 0x06FF);
+  }
+
+  double _calculateKashidaPriority(String word, int position) {
+    // Simplified priority calculation
+    // Real implementation would consider:
+    // - Letter positions (medial positions have higher priority)
+    // - Letter types (some letters look better with kashida)
+    // - Contextual rules
+    return 0.5 + (position / word.length) * 0.5;
+  }
+
+  // STEP 3: CONSTRAINED DYNAMIC PROGRAMMING
+  Future<List<LineBreak>> _runConstrainedDP(
+    List<WordMetrics> words,
+    List<LineConstraint> constraints,
+  ) async {
+    if (words.isEmpty) return [];
+    
+    final n = words.length;
+    final maxLines = MushafRenderingConstants.LINES_PER_PAGE;
+    
+    // DP state: dp[wordIndex][lineCount] = DPState
+    final Map<String, DPState> dp = {};
+    
+    // Initialize: empty solution
+    dp['0,0'] = DPState(
+      cost: 0.0,
+      prevWordIndex: -1,
+      lineBreaks: [],
+    );
+    
+    // Fill DP table
+    for (int i = 0; i < n; i++) {
+      for (int lines = 0; lines < maxLines; lines++) {
+        final currentKey = '$i,$lines';
+        if (!dp.containsKey(currentKey)) continue;
+        
+        final currentState = dp[currentKey]!;
+        
+        // Try extending to different word positions
+        for (int j = i + 1; j <= n && lines + 1 <= maxLines; j++) {
+          final lineWords = words.sublist(i, j);
+          
+          // Check if this line is feasible
+          final lineInfo = _calculateLineFeasibility(lineWords, constraints, lines + 1);
+          
+          if (!lineInfo.isFeasible) continue;
+          
+          final newCost = currentState.cost + lineInfo.cost;
+          final newKey = '$j,${lines + 1}';
+          
+          if (!dp.containsKey(newKey) || dp[newKey]!.cost > newCost) {
+            dp[newKey] = DPState(
+              cost: newCost,
+              prevWordIndex: i,
+              lineBreaks: [
+                ...currentState.lineBreaks,
+                lineInfo.lineBreak,
+              ],
+            );
+          }
+        }
+      }
+    }
+    
+    // Find optimal solution
+    DPState? bestSolution;
+    double bestCost = double.infinity;
+    
+    for (int lines = 1; lines <= maxLines; lines++) {
+      final key = '$n,$lines';
+      if (dp.containsKey(key) && dp[key]!.cost < bestCost) {
+        bestSolution = dp[key];
+        bestCost = dp[key]!.cost;
+      }
+    }
+    
+    return bestSolution?.lineBreaks ?? [];
+  }
+
+  // LINE FEASIBILITY CALCULATION
+  ({bool isFeasible, double cost, LineBreak lineBreak}) _calculateLineFeasibility(
+    List<WordMetrics> lineWords,
+    List<LineConstraint> constraints,
+    int lineNumber,
+  ) {
+    if (lineWords.isEmpty) {
+      return (
+        isFeasible: false,
+        cost: double.infinity,
+        lineBreak: LineBreak(
+          startWordIndex: 0,
+          endWordIndex: 0,
+          kashidaInsertions: [],
+          actualWidth: 0,
+        ),
+      );
+    }
+    
+    // Check constraint violations
+    for (final constraint in constraints) {
+      // Check if this line violates ayah start/end constraints
+      // Simplified implementation - real version needs proper ayah mapping
+    }
+    
+    // Calculate base width
+    final baseWidth = lineWords.map((w) => w.width).reduce((a, b) => a + b);
+    final requiredStretch = targetWidth - baseWidth;
+    
+    if (requiredStretch < 0) {
+      // Line too wide even without kashida
+      return (
+        isFeasible: false,
+        cost: double.infinity,
+        lineBreak: LineBreak(
+          startWordIndex: 0,
+          endWordIndex: lineWords.length,
+          kashidaInsertions: [],
+          actualWidth: baseWidth,
+        ),
+      );
+    }
+    
+    // Calculate maximum possible stretch
+    final maxStretch = lineWords
+        .map((w) => w.kashidaSlots.length * 
+                   MushafRenderingConstants.MAX_KASHIDA_PER_SLOT * 
+                   MushafRenderingConstants.KASHIDA_AVG_WIDTH)
+        .fold(0.0, (a, b) => a + b);
+    
+    if (requiredStretch > maxStretch) {
+      // Not enough kashida slots to fill line
+      return (
+        isFeasible: false,
+        cost: double.infinity,
+        lineBreak: LineBreak(
+          startWordIndex: 0,
+          endWordIndex: lineWords.length,
+          kashidaInsertions: [],
+          actualWidth: baseWidth,
+        ),
+      );
+    }
+    
+    // Calculate optimal kashida distribution
+    final kashidaInsertions = _calculateOptimalKashida(lineWords, requiredStretch);
+    
+    // Calculate cost (prefer minimal kashida, good fullness)
+    final fullnessRatio = (baseWidth + requiredStretch) / targetWidth;
+    final fullnessCost = math.pow(1.0 - fullnessRatio, 2).toDouble();
+    final kashidaCost = kashidaInsertions.length * 0.1; // Penalty for kashida use
+    
+    final totalCost = fullnessCost + kashidaCost;
+    
+    return (
+      isFeasible: true,
+      cost: totalCost,
+      lineBreak: LineBreak(
+        startWordIndex: 0,
+        endWordIndex: lineWords.length,
+        kashidaInsertions: kashidaInsertions,
+        actualWidth: baseWidth + requiredStretch,
+      ),
+    );
+  }
+
+  // OPTIMAL KASHIDA DISTRIBUTION
+  List<KashidaInsertion> _calculateOptimalKashida(
+    List<WordMetrics> words,
+    double targetStretch,
+  ) {
+    final insertions = <KashidaInsertion>[];
+    double remainingStretch = targetStretch;
+    
+    // Collect all slots with priorities
+    final allSlots = <({int wordIndex, int slotIndex, double priority})>[];
+    for (int i = 0; i < words.length; i++) {
+      final word = words[i];
+      for (int j = 0; j < word.kashidaSlots.length; j++) {
+        final slot = word.kashidaSlots[j];
+        if (slot.isValid) {
+          allSlots.add((
+            wordIndex: i,
+            slotIndex: j,
+            priority: slot.priority,
+          ));
+        }
+      }
+    }
+    
+    // Sort by priority (highest first)
+    allSlots.sort((a, b) => b.priority.compareTo(a.priority));
+    
+    // Distribute kashida greedily by priority
+    while (remainingStretch > MushafRenderingConstants.KASHIDA_AVG_WIDTH && 
+           allSlots.isNotEmpty) {
+      for (final slot in allSlots) {
+        if (remainingStretch < MushafRenderingConstants.KASHIDA_AVG_WIDTH) break;
+        
+        // Find existing insertion or create new
+        final existingIndex = insertions.indexWhere((ins) => 
+          ins.wordIndex == slot.wordIndex && ins.slotIndex == slot.slotIndex);
+        
+        if (existingIndex >= 0) {
+          final existing = insertions[existingIndex];
+          if (existing.count < MushafRenderingConstants.MAX_KASHIDA_PER_SLOT) {
+            insertions[existingIndex] = KashidaInsertion(
+              wordIndex: existing.wordIndex,
+              slotIndex: existing.slotIndex,
+              count: existing.count + 1,
+            );
+            remainingStretch -= MushafRenderingConstants.KASHIDA_AVG_WIDTH;
+          }
+        } else {
+          insertions.add(KashidaInsertion(
+            wordIndex: slot.wordIndex,
+            slotIndex: slot.slotIndex,
+            count: 1,
+          ));
+          remainingStretch -= MushafRenderingConstants.KASHIDA_AVG_WIDTH;
+        }
+      }
+    }
+    
+    return insertions;
+  }
+
+  // FALLBACK LAYOUT (font size reduction)
+  Future<List<LineBreak>> _fallbackLayout(List<AyatData> ayatList) async {
+    // Implement fallback dengan font size lebih kecil
+    // Untuk demo, return empty layout
+    print('Using fallback layout - reducing font size');
+    return [];
+  }
+}
+
+// 4. MUSHAF RENDERER
+// 4. MUSHAF RENDERER - FIXED VERSION
+class MushafRenderer {
+  final MushafLayoutEngine _layoutEngine = MushafLayoutEngine();
+
+  // PUBLIC METHOD: Expose layoutPage functionality
+  Future<List<LineBreak>> layoutPage(List<AyatData> ayatList) async {
+    return await _layoutEngine.layoutPage(ayatList);
+  }
+
+  Future<Widget> renderPage(List<AyatData> ayatList) async {
+    final lineBreaks = await _layoutEngine.layoutPage(ayatList);
+    
+    return Container(
+      width: MushafRenderingConstants.PAGE_WIDTH,
+      height: MushafRenderingConstants.PAGE_HEIGHT,
+      padding: const EdgeInsets.only(
+        left: MushafRenderingConstants.MARGIN_LEFT,
+        right: MushafRenderingConstants.MARGIN_RIGHT,
+      ),
+      child: Column(
+        children: lineBreaks.asMap().entries.map((entry) {
+          final lineIndex = entry.key;
+          final lineBreak = entry.value;
+          
+          return SizedBox(
+            height: MushafRenderingConstants.LINE_HEIGHT,
+            child: _renderLine(lineBreak, lineIndex + 1),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _renderLine(LineBreak lineBreak, int lineNumber) {
+    // Render single line dengan kashida insertions
+    return Container(
+      width: double.infinity,
+      height: MushafRenderingConstants.LINE_HEIGHT,
+      alignment: Alignment.centerRight,
+      child: Text(
+        _buildLineText(lineBreak),
+        style: const TextStyle(
+          fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+          fontSize: MushafRenderingConstants.BASE_FONT_SIZE,
+          height: 1.0,
+        ),
+        textDirection: TextDirection.rtl,
+        textAlign: TextAlign.justify,
+      ),
+    );
+  }
+
+  String _buildLineText(LineBreak lineBreak) {
+    // Build text dengan kashida insertions
+    // Simplified implementation
+    return 'Sample line text with kashida'; // Placeholder
+  }
+}

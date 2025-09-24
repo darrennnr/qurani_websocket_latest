@@ -18,6 +18,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 import 'dart:math' as math;
 
+
 class VoskSTTCorrectionPage extends StatefulWidget {
   final int suratId;
   final String suratName;
@@ -55,12 +56,8 @@ class AyatProgress {
 class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
     with TickerProviderStateMixin {
   // ==================== FIXED API CONFIGURATki8uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuION ====================
-  static const String API_BASE_URL = 'https://3c675da91914.ngrok-free.app';
-  static const String WEBSOCKET_URL = 'wss://3c675da91914.ngrok-free.app/ws';
-  static const Duration _apiTimeout = Duration(seconds: 20); // Diperpanjang dari 10s
-  static const Duration _websocketTimeout = Duration(seconds: 15); // Diperpanjang dari 10s
-  static const Duration _connectionRetryDelay = Duration(seconds: 3);
-  static const int _maxRetryAttempts = 5; // Increased retry attempts
+  static const String API_BASE_URL = 'https://f10a437f5502.ngrok-free.app';
+  static const String WEBSOCKET_URL = 'wss://f10a437f5502.ngrok-free.app/ws';
 
   // ==================== TAMBAH DI BAGIAN ATAS CLASS STATE ====================
 
@@ -107,13 +104,13 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
   late AnimationController _waveController;
   late List<GlobalKey> _ayatKeys;
 
-  // UI State
-  bool _hideUnreadAyat = false;
-  bool _isQuranMode = true;
-  int _currentPage = 1;
-  List<AyatData> _currentPageAyats = [];
-  bool _showAdvancedStats = false;
-  bool _isUIVisible = true; // ← TAMBAHKAN BARIS INI
+// UI State
+bool _hideUnreadAyat = false;
+bool _isQuranMode = true;
+int _currentPage = 1;
+List<AyatData> _currentPageAyats = [];
+bool _showAdvancedStats = false;
+bool _isUIVisible = true; // ⭐ TAMBAH INI
   
 
   // Surah info
@@ -195,7 +192,7 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
     );
 
     try {
-      // Prepare request data sesuai API docs
+      // Prepare request data
       final requestData = {
         'user_id': 'flutter_app_${DateTime.now().millisecondsSinceEpoch}',
         'mode': 'surah',
@@ -206,76 +203,69 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
         'data': {},
       };
 
-      _detailedLog('API_SESSION', 'Request data: ${jsonEncode(requestData)}');
+      _detailedLog(
+        'API_SESSION',
+        'Request data prepared: ${jsonEncode(requestData)}',
+      );
 
-      // PERBAIKAN: Enhanced headers dan timeout
       final response = await http
           .post(
-            Uri.parse('$API_BASE_URL/live/start/${widget.suratId}/$_currentAyatNumber'),
+            Uri.parse(
+              '$API_BASE_URL/live/start/${widget.suratId}/$_currentAyatNumber',
+            ),
             headers: {
               'Content-Type': 'application/json',
-              'Accept': 'application/json',
               'ngrok-skip-browser-warning': 'true',
-              'User-Agent': 'Flutter-Qurani-STT/1.0',
-              'Cache-Control': 'no-cache',
+              'Accept': 'application/json',
             },
             body: jsonEncode(requestData),
           )
-          .timeout(_apiTimeout); // PERBAIKAN: Timeout diperpanjang
+          .timeout(Duration(seconds: 10));
 
-      _detailedLog('API_SESSION', 'HTTP Status: ${response.statusCode}');
-      _detailedLog('API_SESSION', 'HTTP Body: ${response.body}');
+      _detailedLog(
+        'API_SESSION',
+        'HTTP Response Status: ${response.statusCode}',
+      );
+      _detailedLog('API_SESSION', 'HTTP Response Body: ${response.body}');
 
-      // PERBAIKAN: Better status code handling
-      if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (response.statusCode == 200 || response.statusCode == 201) {
         final responseData = jsonDecode(response.body);
-        
-        // Validate response structure sesuai API docs
-        if (responseData['sessionId'] != null) {
-          _activeSessionId = responseData['sessionId'];
-          _isSessionActive = true;
+        _activeSessionId = responseData['sessionId'];
+        _isSessionActive = true;
 
-          _detailedLog('API_SESSION', 'Session ID: $_activeSessionId');
-          _logAPICall('POST', '/live/start', response.statusCode, 'Success');
+        _detailedLog(
+          'API_SESSION',
+          'Session initialized successfully - ID: $_activeSessionId',
+        );
+        _logAPICall(
+          'POST',
+          '/live/start',
+          response.statusCode,
+          'Session started successfully',
+        );
 
-          // Initialize WebSocket setelah session berhasil
-          await _initializeWebSocketConnection();
-          
-          setState(() {});
-          _showSnackBar('API Session Started', SnackBarType.success);
-        } else {
-          throw Exception('Invalid response: missing sessionId');
-        }
+        // Initialize WebSocket connection after successful session
+        await _initializeWebSocketConnection();
+
+        setState(() {});
+        _showSnackBar('API Session Started Successfully', SnackBarType.success);
       } else {
         throw Exception('HTTP ${response.statusCode}: ${response.body}');
       }
-    } on TimeoutException catch (e) {
-      _detailedLog('API_SESSION', 'TIMEOUT ERROR: $e');
-      _logAPICall('POST', '/live/start', 0, 'Timeout: $e');
-      
-      // PERBAIKAN: Retry logic untuk timeout
-      if (_reconnectAttempts < _maxRetryAttempts) {
-        _detailedLog('API_SESSION', 'Retrying session initialization...');
-        _reconnectAttempts++;
-        
-        await Future.delayed(_connectionRetryDelay);
-        await _initializeAPISession(); // Retry
-        return;
-      }
-      
-      _isSessionActive = false;
-      _showSnackBar('Connection timeout. Check your internet.', SnackBarType.error);
-      throw Exception('Session initialization timeout after $_maxRetryAttempts attempts');
     } catch (e) {
-      _detailedLog('API_SESSION', 'ERROR: $e');
+      _detailedLog(
+        'API_SESSION',
+        'CRITICAL ERROR: Failed to initialize session - $e',
+      );
       _logAPICall('POST', '/live/start', 0, 'Error: $e');
       _isSessionActive = false;
       _activeSessionId = null;
       setState(() {});
-      _showSnackBar('Failed to start session: $e', SnackBarType.error);
+      _showSnackBar('Failed to start API session: $e', SnackBarType.error);
       rethrow;
     }
   }
+
   // Handle session update
   void _handleSessionUpdate(Map<String, dynamic> data) {
     _detailedLog('WEBSOCKET', 'Session update received');
@@ -294,102 +284,100 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
 
   // ==================== FIXED WEBSOCKET CONNECTION ====================
 
-Future<void> _initializeWebSocketConnection() async {
+  Future<void> _initializeWebSocketConnection() async {
     if (_activeSessionId == null) {
-      _detailedLog('WEBSOCKET', 'ERROR: No active session ID');
+      _detailedLog(
+        'WEBSOCKET',
+        'CRITICAL ERROR: Cannot initialize - no active session ID',
+      );
       return;
     }
 
     try {
-      // PERBAIKAN: WebSocket URL sesuai standar
-      // Karena API docs tidak mendokumentasikan WebSocket endpoint,
-      // kita coba beberapa kemungkinan endpoint
-      final possibleEndpoints = [
-        'wss://3c675da91914.ngrok-free.app/ws/$_activeSessionId', // GANTI URL
-        'wss://3c675da91914.ngrok-free.app/live/ws/$_activeSessionId', // GANTI URL
-        'wss://3c675da91914.ngrok-free.app/ws/live/$_activeSessionId', // GANTI URL
-      ];
-      
-      String wsUrl = possibleEndpoints[0]; // Coba endpoint pertama dulu
-      _detailedLog('WEBSOCKET', 'Connecting to: $wsUrl');
+      // FIXED: Use proper WSS URL format
+      final wsUrl = 'wss://f10a437f5502.ngrok-free.app/ws/$_activeSessionId';
+      _detailedLog('WEBSOCKET', 'Attempting connection to: $wsUrl');
 
+      // Close existing connection if any
       await _closeWebSocketConnection();
-  
-      // PERBAIKAN: Enhanced WebSocket connection dengan proper headers
+
+      // FIXED: Connect with proper headers and timeout
       final socket = await WebSocket.connect(
         wsUrl,
         headers: {
           'ngrok-skip-browser-warning': 'true',
           'User-Agent': 'Flutter-WebSocket-Client/1.0',
-          'Origin': 'flutter-app',
-          'Sec-WebSocket-Protocol': 'echo-protocol',
+          'Sec-WebSocket-Protocol': 'echo-protocol', // Add protocol if needed
         },
-      ).timeout(_websocketTimeout);
+      ).timeout(Duration(seconds: 10));
 
+      // Wrap into WebSocketChannel
       _webSocketChannel = IOWebSocketChannel(socket);
-      _detailedLog('WEBSOCKET', 'WebSocket connected successfully');
+      _detailedLog('WEBSOCKET', 'WebSocket channel created successfully');
 
-      // PERBAIKAN: Connection timeout handler
-      _connectionTimeoutTimer = Timer(_websocketTimeout, () {
+      // Set connection timeout
+      _connectionTimeoutTimer = Timer(Duration(seconds: 5), () {
         if (!_isWebSocketConnected) {
-          _detailedLog('WEBSOCKET', 'Connection timeout');
+          _detailedLog('WEBSOCKET', 'Connection timeout - marking as failed');
           _handleWebSocketError('Connection timeout');
         }
       });
 
-      // PERBAIKAN: Enhanced stream listener
+      // FIXED: Improved stream listener
       _webSocketChannel!.stream.listen(
         (data) {
           _connectionTimeoutTimer?.cancel();
-          
+
+          // Mark as connected on first message
           if (!_isWebSocketConnected) {
             _isWebSocketConnected = true;
             _reconnectAttempts = 0;
-            _detailedLog('WEBSOCKET', 'Connected successfully');
+            _detailedLog('WEBSOCKET', 'Connection established successfully');
             _startHeartbeat();
-            
-            // Send initial handshake
-            _sendWebSocketMessage({
-              'type': 'connect',
-              'session_id': _activeSessionId,
-              'client_type': 'flutter_stt',
-            });
-            
             if (mounted) setState(() {});
+
+            // Send initial connection message
+            _sendWebSocketMessage({
+              'type': 'client_connected',
+              'session_id': _activeSessionId,
+              'client_info': 'Flutter-STT-Client',
+            });
           }
 
           _handleWebSocketMessage(data);
         },
         onError: (error) {
           _connectionTimeoutTimer?.cancel();
-          _detailedLog('WEBSOCKET', 'Stream error: $error');
+          _detailedLog('WEBSOCKET', 'STREAM ERROR: $error');
+          _isWebSocketConnected = false;
           _handleWebSocketError(error);
         },
         onDone: () {
           _connectionTimeoutTimer?.cancel();
-          _detailedLog('WEBSOCKET', 'Connection closed');
+          _detailedLog('WEBSOCKET', 'Connection closed by server');
           _isWebSocketConnected = false;
           if (mounted) setState(() {});
-          
-          // Auto-reconnect logic
-          if (_isSessionActive && _reconnectAttempts < _maxRetryAttempts) {
+
+          // Only attempt reconnection if session is still active
+          if (_isSessionActive && _reconnectAttempts < _maxReconnectAttempts) {
             _attemptReconnection();
           }
         },
         cancelOnError: false,
       );
 
+      // Wait a moment for connection to establish
+      await Future.delayed(Duration(milliseconds: 500));
     } catch (e) {
       _connectionTimeoutTimer?.cancel();
-      _detailedLog('WEBSOCKET', 'Connection failed: $e');
+      _detailedLog('WEBSOCKET', 'CONNECTION FAILED: $e');
       _isWebSocketConnected = false;
       _handleWebSocketError(e);
       if (mounted) setState(() {});
     }
   }
 
-
-void _handleWebSocketMessage(dynamic data) {
+  void _handleWebSocketMessage(dynamic data) {
     try {
       final messageData = jsonDecode(data.toString());
       _detailedLog('WEBSOCKET_RECEIVE', 'Message: ${jsonEncode(messageData)}');
@@ -397,9 +385,8 @@ void _handleWebSocketMessage(dynamic data) {
       final messageType = messageData['type'];
 
       switch (messageType) {
-        case 'connection_ack':
-        case 'connected':
-          _detailedLog('WEBSOCKET', 'Connection acknowledged');
+        case 'connection_acknowledged':
+          _detailedLog('WEBSOCKET', 'Connection acknowledged by server');
           break;
 
         case 'transcript_result':
@@ -407,7 +394,6 @@ void _handleWebSocketMessage(dynamic data) {
           _successfulAPIResponses++;
           break;
 
-        case 'word_result':
         case 'word_feedback':
           _handleWordFeedback(messageData);
           break;
@@ -417,23 +403,26 @@ void _handleWebSocketMessage(dynamic data) {
           break;
 
         case 'error':
-          final errorMsg = messageData['message'] ?? 'Unknown WebSocket error';
-          _detailedLog('WEBSOCKET_ERROR', 'Server error: $errorMsg');
-          _showSnackBar('Server Error: $errorMsg', SnackBarType.error);
+          final errorMsg = messageData['message'] ?? 'Unknown error';
+          _detailedLog('WEBSOCKET_ERROR', 'API Error: $errorMsg');
+          _showSnackBar('API Error: $errorMsg', SnackBarType.error);
           break;
 
-        case 'heartbeat_ack':
-        case 'pong':
+        case 'heartbeat_response':
           _detailedLog('WEBSOCKET', 'Heartbeat acknowledged');
           break;
 
         default:
-          _detailedLog('WEBSOCKET_RECEIVE', 'Unknown message type: $messageType');
+          _detailedLog(
+            'WEBSOCKET_RECEIVE',
+            'Unknown message type: $messageType',
+          );
       }
     } catch (e) {
       _detailedLog('WEBSOCKET_RECEIVE', 'Error parsing message: $e');
     }
   }
+
   // ==================== IMPROVED ERROR HANDLING ====================
 
   void _handleWebSocketError(dynamic error) {
@@ -771,79 +760,52 @@ void _handleWebSocketMessage(dynamic data) {
   }
 
   // REPLACE method: _sendFinalTranscript()
-void _sendFinalTranscript(String transcript) {
-    if (transcript.trim().isEmpty) return;
-
-    final normalizedTranscript = _normalizeTranscript(transcript);
-    final normalizedLast = _normalizeTranscript(_lastSentTranscript);
-
-    if (normalizedTranscript == normalizedLast || normalizedTranscript.length < 3) {
-      _detailedLog('TRANSCRIPT_SEND', 'Skipping duplicate: "$transcript"');
+  void _sendFinalTranscript(String transcript) {
+    if (transcript.trim().isEmpty) {
       return;
     }
 
-    _detailedLog('TRANSCRIPT_SEND', 'Sending: "$transcript"');
+    // Normalize for deduplication check
+    final normalizedTranscript = _normalizeTranscript(transcript);
+    final normalizedLast = _normalizeTranscript(_lastSentTranscript);
 
-    // PERBAIKAN: WebSocket-first approach dengan HTTP fallback
-    if (_isWebSocketConnected && _webSocketChannel != null) {
-      // Primary: Send via WebSocket
+    if (normalizedTranscript == normalizedLast ||
+        normalizedTranscript.length < 3) {
+      _detailedLog(
+        'TRANSCRIPT_SEND',
+        'Skipping duplicate/short transcript: "$transcript"',
+      );
+      return;
+    }
+
+    _detailedLog('TRANSCRIPT_SEND', 'Sending final transcript: "$transcript"');
+
+    // WEBSOCKET ONLY - No HTTP fallback
+    if (_isWebSocketConnected) {
       _sendWebSocketMessage({
         'type': 'final_transcript',
         'session_id': _activeSessionId,
         'transcript': transcript,
         'surah_id': widget.suratId,
         'ayah': _currentAyatNumber,
-        'timestamp': DateTime.now().toIso8601String(),
       });
-      
+
       _lastSentTranscript = transcript;
-      _totalTranscriptsSent++;
-      
+      _detailedLog('WEBSOCKET_SEND', 'Final transcript sent: "$transcript"');
     } else {
-      // PERBAIKAN: HTTP fallback sesuai API docs
-      _sendTranscriptViaHTTP(transcript);
-    }
-  }
+      _detailedLog(
+        'TRANSCRIPT_SEND',
+        'WebSocket not connected - transcript dropped',
+      );
+      _showSnackBar(
+        'Connection lost - transcript not sent',
+        SnackBarType.error,
+      );
 
-  // TAMBAH method baru untuk HTTP fallback:
-  Future<void> _sendTranscriptViaHTTP(String transcript) async {
-    try {
-      _detailedLog('HTTP_FALLBACK', 'Sending transcript via HTTP: "$transcript"');
-      
-      final requestBody = {
-        'transcript': transcript,
-        'surah_id': widget.suratId,
-        'ayah': _currentAyatNumber,
-      };
-
-      final response = await http
-          .post(
-            Uri.parse('$API_BASE_URL/transcript/${widget.suratId}/$_currentAyatNumber'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-              'ngrok-skip-browser-warning': 'true',
-            },
-            body: jsonEncode(requestBody),
-          )
-          .timeout(_apiTimeout);
-
-      if (response.statusCode >= 200 && response.statusCode < 300) {
-        final responseData = jsonDecode(response.body);
-        _handleTranscriptResult(responseData);
-        _successfulAPIResponses++;
-        _lastSentTranscript = transcript;
-        _totalTranscriptsSent++;
-        
-        _detailedLog('HTTP_FALLBACK', 'Success: ${response.body}');
-        _logAPICall('POST', '/transcript', response.statusCode, 'Success');
-      } else {
-        throw Exception('HTTP ${response.statusCode}: ${response.body}');
+      // Try to reconnect immediately
+      if (_isSessionActive) {
+        _initializeWebSocketConnection();
       }
-    } catch (e) {
-      _detailedLog('HTTP_FALLBACK', 'Failed: $e');
-      _logAPICall('POST', '/transcript', 0, 'Error: $e');
-      _showSnackBar('Failed to send transcript', SnackBarType.error);
     }
   }
 
@@ -993,15 +955,16 @@ void _sendFinalTranscript(String transcript) {
   Color _getConnectionStatusColor() {
     if (!_isSessionActive) return errorColor;
     if (_reconnectAttempts > 0) return warningColor;
-    if (!_isWebSocketConnected) return warningColor; // Changed from errorColor
+    if (!_isWebSocketConnected) return errorColor;
     if (!_isListening) return primaryColor;
     return correctColor;
   }
 
   String _getConnectionStatusText() {
     if (!_isSessionActive) return 'Session Inactive';
-    if (_reconnectAttempts > 0) return 'Reconnecting... (${_reconnectAttempts}/$_maxRetryAttempts)';
-    if (!_isWebSocketConnected) return 'WebSocket Connecting... (HTTP Fallback Active)';
+    if (_reconnectAttempts > 0)
+      return 'Reconnecting... (${_reconnectAttempts}/${_maxReconnectAttempts})';
+    if (!_isWebSocketConnected) return 'WebSocket Disconnected';
     if (!_isListening) return 'Ready (WebSocket Connected)';
     return 'Listening (WebSocket Live)';
   }
@@ -1282,6 +1245,18 @@ void _sendFinalTranscript(String transcript) {
     }
   }
 
+  // ---------- NEW: Mushaf rendering cache & settings ----------
+final Map<int, List<String>> _pageLinesCache = {}; // page -> list of final line strings
+final TextStyle _mushafTextStyle = const TextStyle(
+  fontSize: 25,
+  fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+  height: 1.0,
+);
+final int _linesPerPage = 15; // keep default mushaf Madinah
+final double _lineTolerancePx = 1.0; // tolerance when matching widths
+// -----------------------------------------------------------
+
+
   void _handleWordFeedback(Map<String, dynamic> data) {
     _detailedLog('API_RESPONSE', 'Word feedback received: ${jsonEncode(data)}');
 
@@ -1422,7 +1397,7 @@ void _sendFinalTranscript(String transcript) {
     }
   }
 
-Future<void> _endAPISession() async {
+  Future<void> _endAPISession() async {
     if (!_isSessionActive || _activeSessionId == null) {
       _detailedLog('API_SESSION', 'No active session to end');
       return;
@@ -1431,32 +1406,31 @@ Future<void> _endAPISession() async {
     try {
       _detailedLog('API_SESSION', 'Ending session: $_activeSessionId');
 
-      // Send end session request sesuai API docs
       final response = await http
           .post(
             Uri.parse('$API_BASE_URL/live/end/$_activeSessionId'),
             headers: {
               'Content-Type': 'application/json',
-              'Accept': 'application/json',
               'ngrok-skip-browser-warning': 'true',
             },
           )
-          .timeout(_apiTimeout);
+          .timeout(Duration(seconds: 5));
 
-      if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (response.statusCode == 200) {
         _detailedLog('API_SESSION', 'Session ended successfully');
-        _logAPICall('POST', '/live/end', response.statusCode, 'Success');
+        _logAPICall('POST', '/live/end', response.statusCode, 'Session ended');
       } else {
-        _detailedLog('API_SESSION', 'End session error: ${response.statusCode} - ${response.body}');
-        _logAPICall('POST', '/live/end', response.statusCode, 'Error: ${response.body}');
+        _detailedLog(
+          'API_SESSION',
+          'Error ending session - HTTP ${response.statusCode}: ${response.body}',
+        );
       }
     } catch (e) {
       _detailedLog('API_SESSION', 'Error ending session: $e');
-      _logAPICall('POST', '/live/end', 0, 'Error: $e');
     } finally {
       _activeSessionId = null;
       _isSessionActive = false;
-      if (mounted) setState(() {});
+      setState(() {});
     }
   }
 
@@ -1989,6 +1963,181 @@ Future<void> _endAPISession() async {
     }
   }
 
+  // ---------- NEW: Measurement & Justify Helpers ----------
+
+double _measureTextWidth(String text, TextStyle style) {
+  final tp = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.rtl,
+    textScaleFactor: MediaQuery.of(context).textScaleFactor,
+  );
+  tp.layout(); // unconstrained
+  return tp.width;
+}
+
+/// Simple heuristic to detect kashida-allowed positions in an Arabic word.
+/// This is a heuristic: we avoid non-joining letters like ا د ذ ر ز و and punctuation.
+List<int> _kashidaSlotsInWord(String word) {
+  final nonJoining = <String>{'ا', 'د', 'ذ', 'ر', 'ز', 'و', 'إ', 'أ', 'آ', 'ء', 'ؤ', 'ئ'};
+  List<int> slots = [];
+  for (int i = 0; i < word.length - 1; i++) {
+    final ch = word[i];
+    final nxt = word[i + 1];
+    if (ch.trim().isEmpty || nxt.trim().isEmpty) continue;
+    if (!nonJoining.contains(ch) && !RegExp(r'[\u0600-\u06FF]').hasMatch(ch) == false) {
+      // rough check — if both are arabic letters and left-join possible
+      slots.add(i + 1); // slot after char i
+    } else {
+      // still allow many cases; we keep heuristic permissive
+      if (!nonJoining.contains(ch) && RegExp(r'[\u0600-\u06FF]').hasMatch(ch)) {
+        slots.add(i + 1);
+      }
+    }
+  }
+  return slots;
+}
+
+/// Insert tatweel(s) in a given word at a slot index
+String _insertKashidaAtSlot(String word, int slotIndex, int count) {
+  if (slotIndex < 0 || slotIndex > word.length) return word;
+  final k = '\u0640' * count;
+  return word.substring(0, slotIndex) + k + word.substring(slotIndex);
+}
+
+/// Justify a line string to targetWidth using kashida insertion (heuristic).
+/// lineTokens = list of words (already in order). Returns final string that will be rendered.
+String _justifyLineWithKashida(List<String> lineTokens, double targetWidth, TextStyle style) {
+  if (lineTokens.isEmpty) return '';
+  String joinWithSingleSpace(List<String> toks) => toks.join(' ');
+  String candidate = joinWithSingleSpace(lineTokens);
+  double measured = _measureTextWidth(candidate, style);
+  if ((targetWidth - measured).abs() <= _lineTolerancePx) return candidate;
+
+  // If overflow, return candidate (caller should handle overflow by re-segmenting)
+  if (measured > targetWidth) {
+    return candidate;
+  }
+
+  double deficit = targetWidth - measured;
+
+  // Find all slots across words
+  List<Map<String, dynamic>> slots = []; // {wordIndex, slotIndex}
+  for (int wi = 0; wi < lineTokens.length; wi++) {
+    final w = lineTokens[wi];
+    final localSlots = _kashidaSlotsInWord(w);
+    for (final s in localSlots) {
+      slots.add({'wordIndex': wi, 'slotIndex': s});
+    }
+  }
+
+  if (slots.isEmpty) {
+    // fallback: increase spaces uniformly
+    // We'll return original and let rendering use wordSpacing fallback if needed
+    return candidate;
+  }
+
+  // measure one kashida unit roughly by inserting one into first slot and measuring delta
+  final first = slots.first;
+  final tmpTokens = List<String>.from(lineTokens);
+  tmpTokens[first['wordIndex']] =
+      _insertKashidaAtSlot(tmpTokens[first['wordIndex']], first['slotIndex'], 1);
+  final widthWithOne = _measureTextWidth(joinWithSingleSpace(tmpTokens), style);
+  final kashidaUnit = (widthWithOne - measured).clamp(0.5, 40.0); // avoid zero
+
+  int needed = (deficit / kashidaUnit).ceil();
+
+  // distribute needed kashida across available slots, one by one
+  int maxPerSlot = 4;
+  int remaining = needed;
+  int slotPtr = 0;
+  final appliedCounts = List<int>.filled(slots.length, 0);
+  while (remaining > 0 && slotPtr < 10000) {
+    final idx = slotPtr % slots.length;
+    if (appliedCounts[idx] < maxPerSlot) {
+      final s = slots[idx];
+      final wi = s['wordIndex'] as int;
+      final si = s['slotIndex'] as int;
+      lineTokens[wi] = _insertKashidaAtSlot(lineTokens[wi], si + appliedCounts[idx], 1);
+      appliedCounts[idx] += 1;
+      remaining--;
+      // recompute measured every N insertions to be safe (costly but safe)
+      if (remaining % 5 == 0 || remaining == 0) {
+        final joined = joinWithSingleSpace(lineTokens);
+        measured = _measureTextWidth(joined, style);
+        deficit = targetWidth - measured;
+        if (deficit <= _lineTolerancePx) return joined;
+      }
+    }
+    slotPtr++;
+    if (slotPtr > slots.length * maxPerSlot * 3) break; // safety
+  }
+
+  // final measurement and return
+  final finalJoined = joinWithSingleSpace(lineTokens);
+  // If still narrower, we return finalJoined; caller may apply small wordSpacing.
+  return finalJoined;
+}
+
+/// Build per-line final strings for a given page
+Future<List<String>> _buildPageLinesCache(int page, List<AyatData> pageAyats) async {
+  final lines = <String>[];
+
+  // line number in mushaf pages commonly start at 1..15 per page
+  // We'll iterate through all ayats on the page, using their lineStart/lineEnd if present
+  for (final ayat in pageAyats) {
+    final tokens = (ayat.wordsArray.isNotEmpty ? ayat.wordsArray : ayat.wordsArrayNt.isNotEmpty ? ayat.wordsArrayNt : ayat.arabic.split(RegExp(r'\s+'))).where((t) => t.trim().isNotEmpty).toList();
+    final L = (ayat.lineEnd - ayat.lineStart + 1).clamp(1, 50);
+    if (L <= 1) {
+      // whole ayah in one line
+      lines.add(tokens.join(' '));
+      continue;
+    }
+
+    // Simple segmentation: evenly distribute tokens into L segments (heuristic).
+    // Better: DP (cost minimization). For speed & deterministic output we start with even distribution.
+    int n = tokens.length;
+    int base = n ~/ L;
+    int rem = n % L;
+    int ptr = 0;
+    for (int i = 0; i < L; i++) {
+      int take = base + (i < rem ? 1 : 0);
+      if (take <= 0) {
+        // ensure at least 1 token per line if possible
+        if (ptr < n) {
+          take = 1;
+        } else {
+          take = 0;
+        }
+      }
+      final seg = tokens.sublist(ptr, min(ptr + take, n));
+      ptr += take;
+      if (seg.isEmpty) continue;
+      lines.add(seg.join(' '));
+    }
+
+    // If any tokens remain (rare), append to last line
+    if (ptr < n) {
+      final last = lines.removeLast();
+      final remainder = tokens.sublist(ptr).join(' ');
+      lines.add('$last $remainder');
+    }
+  }
+
+  // Now we attempt to justify each line to page width using kashida heuristics.
+  final renderBox = context.findRenderObject();
+  double maxWidth = MediaQuery.of(context).size.width - 32; // account padding (as in your UI uses 16 left/right)
+  final finalLines = <String>[];
+  for (final l in lines) {
+    final tokenList = l.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    final candidate = _justifyLineWithKashida(List<String>.from(tokenList), maxWidth, _mushafTextStyle);
+    finalLines.add(candidate);
+  }
+
+  return finalLines;
+}
+// -----------------------------------------------------------
+
+
   // ==================== ENHANCED INITIALIZATION ====================
 
   Future<void> _initializeApp() async {
@@ -2195,14 +2344,16 @@ Future<void> _endAPISession() async {
     }
 
     try {
-      final response = await _supabase
-          .from('m10_quran_ayah')
-          .select(
-            'surah_id, ayah, arabic, no_tashkeel, transliteration, words_array_nt, page, juz, quarter_hizb',
-          )
-          .eq('page', _currentPage)
-          .order('surah_id', ascending: true)
-          .order('ayah', ascending: true);
+// REPLACE SELECT FIELDS (inside _loadCurrentPageAyats)
+final response = await _supabase
+  .from('m10_quran_ayah')
+  .select(
+    'surah_id, ayah, arabic, no_tashkeel, transliteration, words_array, words_array_nt, line_start, line_end, page, juz, quarter_hizb'
+  )
+  .eq('page', _currentPage)
+  .order('surah_id', ascending: true)
+  .order('ayah', ascending: true);
+
 
       _currentPageAyats = response
           .map((data) => AyatData.fromJson(data))
@@ -2214,6 +2365,10 @@ Future<void> _endAPISession() async {
       _log('DATA: Error loading page ayats - $e');
       _currentPageAyats = [];
     }
+
+    // Build / refresh page lines cache for this page
+_pageLinesCache[_currentPage] = await _buildPageLinesCache(_currentPage, _currentPageAyats);
+
   }
 
   void _performIntelligentNavigation() {
@@ -2263,132 +2418,121 @@ Future<void> _endAPISession() async {
 Widget build(BuildContext context) {
   return Scaffold(
     backgroundColor: backgroundColor,
-    // MODIFIKASI: AppBar hanya tampil jika _isUIVisible = true
-    appBar: _isUIVisible ? _buildEnhancedAppBar() : null,
-    body: _isLoading
-        ? _buildEnhancedLoadingWidget()
-        : _errorMessage.isNotEmpty && !_isListening
-        ? _buildEnhancedErrorWidget()
-        : GestureDetector(
-            // TAMBAHAN: GestureDetector untuk mendeteksi tap
-            onTap: () {
-              setState(() {
-                _isUIVisible = !_isUIVisible; // Toggle UI visibility
-              });
-            },
-            child: Column(
+    appBar: _isUIVisible ? _buildEnhancedAppBar() : null, // ⭐ CONDITIONAL
+    body: GestureDetector( // ⭐ WRAP DENGAN GESTUREDETECTOR
+      onTap: _toggleUIVisibility,
+      behavior: HitTestBehavior.translucent,
+      child: _isLoading
+          ? _buildEnhancedLoadingWidget()
+          : _errorMessage.isNotEmpty && !_isListening
+          ? _buildEnhancedErrorWidget()
+          : Column(
               children: [
                 Expanded(child: _buildEnhancedMainContent()),
-                if (_showLogs && _isUIVisible) _buildEnhancedLogsPanel(),
+                if (_showLogs) _buildEnhancedLogsPanel(),
               ],
             ),
-          ),
-  );
-}
-
-PreferredSizeWidget _buildEnhancedAppBar() {
-  // TAMBAHAN: Animated opacity untuk smooth transition
-  return PreferredSize(
-    preferredSize: const Size.fromHeight(kToolbarHeight),
-    child: AnimatedOpacity(
-      duration: const Duration(milliseconds: 200),
-      opacity: _isUIVisible ? 1.0 : 0.0,
-      child: AppBar(
-        backgroundColor: primaryColor,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: Padding(
-          padding: const EdgeInsets.only(left: 15),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const Icon(Icons.menu, size: 24, color: Colors.white),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Text(
-                      'Qurani Hafidz',
-                      style: TextStyle(fontSize: 16, height: 1.2),
-                    ),
-                    Text(
-                      'Surat Yasin 36 - 83 Ayat',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w400,
-                        height: 1.2,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        titleSpacing: 0,
-        actions: [
-          // API Status indicator
-          Container(
-            margin: const EdgeInsets.only(right: 8),
-            child: Icon(
-              _isWebSocketConnected ? Icons.wifi : Icons.wifi_off,
-              color: _isWebSocketConnected
-                  ? Colors.greenAccent
-                  : Colors.redAccent,
-              size: 20,
-            ),
-          ),
-
-          // Toggle mode button
-          IconButton(
-            icon: Icon(
-              _isQuranMode ? Icons.menu_book : Icons.view_list,
-              size: 20,
-            ),
-            onPressed: () async {
-              setState(() {
-                _isQuranMode = !_isQuranMode;
-              });
-              await _loadCurrentPageAyats();
-            },
-            tooltip: _isQuranMode
-                ? 'Switch to List Mode'
-                : 'Switch to Mushaf Mode',
-          ),
-
-          // Hide/show button
-          IconButton(
-            icon: Icon(
-              _hideUnreadAyat ? Icons.visibility : Icons.visibility_off,
-              size: 20,
-            ),
-            onPressed: () {
-              setState(() {
-                _hideUnreadAyat = !_hideUnreadAyat;
-              });
-            },
-            tooltip: _hideUnreadAyat ? 'Show All Text' : 'Hide Unread',
-          ),
-
-          PopupMenuButton<String>(
-            onSelected: _handleMenuAction,
-            iconSize: 20,
-            itemBuilder: (BuildContext context) => [
-              const PopupMenuItem(value: 'logs', child: Text('Debug Logs')),
-              const PopupMenuItem(value: 'api_status', child: Text('API Status')),
-              const PopupMenuItem(value: 'settings', child: Text('STT Settings')),
-              const PopupMenuItem(value: 'reset', child: Text('Reset Session')),
-              const PopupMenuItem(value: 'export', child: Text('Export Session')),
-            ],
-          ),
-        ],
-      ),
     ),
   );
 }
+
+  PreferredSizeWidget _buildEnhancedAppBar() {
+    return AppBar(
+      backgroundColor: primaryColor,
+      foregroundColor: Colors.white,
+      elevation: 0,
+      title: Padding(
+        padding: const EdgeInsets.only(left: 15),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const Icon(Icons.menu, size: 24, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text(
+                    'Qurani Hafidz',
+                    style: TextStyle(fontSize: 16, height: 1.2),
+                  ),
+                  Text(
+                    'Surat Yasin 36 - 83 Ayat ${_isSessionActive ? "• API Connected" : "• API Disconnected"}',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w400,
+                      height: 1.2,
+                      color: _isSessionActive
+                          ? Colors.greenAccent
+                          : Colors.redAccent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      titleSpacing: 0,
+      actions: [
+        // API Status indicator
+        Container(
+          margin: const EdgeInsets.only(right: 8),
+          child: Icon(
+            _isWebSocketConnected ? Icons.wifi : Icons.wifi_off,
+            color: _isWebSocketConnected
+                ? Colors.greenAccent
+                : Colors.redAccent,
+            size: 20,
+          ),
+        ),
+
+        // Toggle mode button
+        IconButton(
+          icon: Icon(
+            _isQuranMode ? Icons.menu_book : Icons.view_list,
+            size: 20,
+          ),
+          onPressed: () async {
+            setState(() {
+              _isQuranMode = !_isQuranMode;
+            });
+            await _loadCurrentPageAyats();
+          },
+          tooltip: _isQuranMode
+              ? 'Switch to List Mode'
+              : 'Switch to Mushaf Mode',
+        ),
+
+        // Hide/show button
+        IconButton(
+          icon: Icon(
+            _hideUnreadAyat ? Icons.visibility : Icons.visibility_off,
+            size: 20,
+          ),
+          onPressed: () {
+            setState(() {
+              _hideUnreadAyat = !_hideUnreadAyat;
+            });
+          },
+          tooltip: _hideUnreadAyat ? 'Show All Text' : 'Hide Unread',
+        ),
+
+        PopupMenuButton<String>(
+          onSelected: _handleMenuAction,
+          iconSize: 20,
+          itemBuilder: (BuildContext context) => [
+            const PopupMenuItem(value: 'logs', child: Text('Debug Logs')),
+            const PopupMenuItem(value: 'api_status', child: Text('API Status')),
+            const PopupMenuItem(value: 'settings', child: Text('STT Settings')),
+            const PopupMenuItem(value: 'reset', child: Text('Reset Session')),
+            const PopupMenuItem(value: 'export', child: Text('Export Session')),
+          ],
+        ),
+      ],
+    );
+  }
 
   void _handleMenuAction(String action) {
     switch (action) {
@@ -2415,38 +2559,43 @@ Widget _buildEnhancedMainContent() {
     children: [
       Column(
         children: [
-          // MODIFIKASI: Real-time Status Panel hanya tampil jika UI visible
-          if ((_isListening || _showAdvancedStats) && _isUIVisible) 
+          // ⭐ CONDITIONAL STATUS PANELS
+          if (_isUIVisible && (_isListening || _showAdvancedStats))
             _buildRealtimeStatusPanel(),
 
-          // MODIFIKASI: API Status panel hanya tampil jika UI visible
-          if (_showAdvancedStats && _isUIVisible) 
+          if (_isUIVisible && _showAdvancedStats) 
             _buildAPIStatsPanel(),
 
-          // Quran text tetap di tempatnya
-Expanded(
-  flex: 4,
-  child: Padding(
-    // MODIFIKASI: Padding bottom hanya diterapkan jika UI visible
-    padding: EdgeInsets.only(bottom: _isUIVisible ? 80 : 0),
-    child: Center(
-      child: _buildEnhancedQuranText(),
-    ),
-  ),
-),
-
+          // ⭐ QURAN TEXT dengan conditional padding
+          Expanded(
+            flex: 4,
+            child: Padding(
+              padding: EdgeInsets.only(
+                bottom: _isUIVisible ? 80 : 0, // Dynamic padding
+              ),
+              child: _buildEnhancedQuranText(),
+            ),
+          ),
         ],
       ),
-      // MODIFIKASI: Bottom bar hanya tampil jika UI visible
+      // ⭐ CONDITIONAL BOTTOM BAR
       if (_isUIVisible)
         Positioned(
           bottom: 0, 
           left: 0, 
           right: 0, 
-          child: _buildBottomBar()
+          child: _buildBottomBar(),
         ),
     ],
   );
+}
+
+void _toggleUIVisibility() {
+  setState(() {
+    _isUIVisible = !_isUIVisible;
+  });
+  
+  _detailedLog('UI_TOGGLE', _isUIVisible ? 'UI shown' : 'UI hidden');
 }
 
   Widget _buildBottomBar() {
@@ -2810,78 +2959,63 @@ Expanded(
     );
   }
 
-  Widget _buildContinuousQuranText() {
-    List<Widget> pageElements = [];
-
-    Map<int, List<AyatData>> ayatsBySurah = {};
-    for (final ayat in _currentPageAyats) {
-      if (!ayatsBySurah.containsKey(ayat.surah_id)) {
-        ayatsBySurah[ayat.surah_id] = [];
-      }
-      ayatsBySurah[ayat.surah_id]!.add(ayat);
-    }
-
-    ayatsBySurah.forEach((surahId, ayats) {
-      bool isNewSurah = ayats.any((ayat) => ayat.ayah == 1);
-
-      if (isNewSurah && surahId != 1 && surahId != 9) {
-        pageElements.add(_buildSurahHeaderInPage(surahId));
-        pageElements.add(_buildBismillahInPage());
-      }
-
-      List<InlineSpan> textSpans = [];
-
-      for (int i = 0; i < ayats.length; i++) {
-        final ayat = ayats[i];
-
-        int ayatIndex = _ayatList.indexWhere(
-          (a) => a.surah_id == ayat.surah_id && a.ayah == ayat.ayah,
-        );
-        bool isCurrentAyat = ayatIndex >= 0 && ayatIndex == _currentAyatIndex;
-
-        textSpans.addAll(
-          _buildContinuousAyatSpansWithAPI(ayat, ayatIndex, isCurrentAyat),
-        );
-
-        textSpans.add(
-          TextSpan(
-            text: ' ${_getArabicNumber(ayat.ayah)} ',
-            style: TextStyle(
-              fontSize: 25,
-              fontFamily: 'Uthmanic',
-              color: const Color.fromARGB(150, 0, 0, 0),
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        );
-
-        if (i < ayats.length - 1 || ayatsBySurah.keys.last != surahId) {
-          textSpans.add(TextSpan(text: ' '));
-        }
-      }
-
-      pageElements.add(
-        RichText(
-          textAlign: TextAlign.justify,
-          textDirection: TextDirection.rtl,
-          text: TextSpan(
-            style: const TextStyle(
-              fontSize: 25,
-              fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
-              wordSpacing: -5.9,
-              letterSpacing: -0.5,
-            ),
-            children: textSpans,
-          ),
-        ),
-      );
+Widget _buildContinuousQuranText() {
+  // Ensure page cache exists
+  if (!_pageLinesCache.containsKey(_currentPage)) {
+    // synchronous fallback: quick on-the-fly build (will be replaced next tick)
+    _buildPageLinesCache(_currentPage, _currentPageAyats).then((lines) {
+      setState(() {
+        _pageLinesCache[_currentPage] = lines;
+      });
     });
+  }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: pageElements,
+  final lines = _pageLinesCache[_currentPage] ?? [];
+
+  if (lines.isEmpty) {
+    // Fallback to previous behavior (single RichText) if cache not ready
+    List<InlineSpan> textSpans = [];
+    for (final ayat in _currentPageAyats) {
+      textSpans.addAll(_buildContinuousAyatSpansWithAPI(ayat, 0, false));
+      textSpans.add(TextSpan(text: ' ${_getArabicNumber(ayat.ayah)} '));
+    }
+    return RichText(
+      textAlign: TextAlign.justify,
+      textDirection: TextDirection.rtl,
+      text: TextSpan(
+        style: _mushafTextStyle,
+        children: textSpans,
+      ),
     );
   }
+
+  // Render as Column of single-line Text widgets (one per mushaf line)
+  final List<Widget> lineWidgets = [];
+  for (final ln in lines) {
+    lineWidgets.add(
+      Container(
+        alignment: Alignment.centerRight,
+        // keep tight height but allow diacritics
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Text(
+          ln,
+          style: _mushafTextStyle,
+          textAlign: TextAlign.justify,
+          textDirection: TextDirection.rtl,
+          softWrap: false, // critical: prevent Flutter auto-wrapping
+          maxLines: 1,
+          overflow: TextOverflow.visible,
+        ),
+      ),
+    );
+  }
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: lineWidgets,
+  );
+}
+
 
   List<InlineSpan> _buildContinuousAyatSpansWithAPI(
     AyatData ayat,
@@ -3803,36 +3937,50 @@ class AyatData {
   final int surah_id;
   final int ayah;
   final String arabic;
-  final String noTashkeel;
-  final String transliteration;
-  final List<String> wordsArrayNt;
+  final List<String> wordsArray; // with tashkeel
+  final List<String> wordsArrayNt; // no tashkeel fallback
+  final int lineStart;
+  final int lineEnd;
   final int page;
   final int juz;
-  final double quarterHizb;
+  // ... other fields you already have
 
   AyatData({
     required this.surah_id,
     required this.ayah,
     required this.arabic,
-    required this.noTashkeel,
-    required this.transliteration,
+    required this.wordsArray,
     required this.wordsArrayNt,
+    required this.lineStart,
+    required this.lineEnd,
     required this.page,
     required this.juz,
-    required this.quarterHizb,
   });
 
   factory AyatData.fromJson(Map<String, dynamic> json) {
+    List<String> parseListField(dynamic v) {
+      if (v == null) return [];
+      if (v is List) return v.map((e) => e.toString()).toList();
+      // sometimes returned as PostgreSQL array string or JSON string
+      final s = v.toString();
+      try {
+        final dynamic parsed = jsonDecode(s);
+        if (parsed is List) return parsed.map((e) => e.toString()).toList();
+      } catch (_) {}
+      // fallback: simple split by space (not perfect but safe)
+      return s.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    }
+
     return AyatData(
-      surah_id: json['surah_id'] ?? 0,
-      ayah: json['ayah'] ?? 0,
-      arabic: json['arabic'] ?? '',
-      noTashkeel: json['no_tashkeel'] ?? '',
-      transliteration: json['transliteration'] ?? '',
-      wordsArrayNt: (json['words_array_nt'] as List?)?.cast<String>() ?? [],
-      page: json['page'] ?? 1,
-      juz: json['juz'] ?? 1,
-      quarterHizb: (json['quarter_hizb'] ?? 0.0).toDouble(),
+      surah_id: json['surah_id'] is int ? json['surah_id'] : int.parse(json['surah_id'].toString()),
+      ayah: json['ayah'] is int ? json['ayah'] : int.parse(json['ayah'].toString()),
+      arabic: (json['arabic'] ?? '').toString(),
+      wordsArray: parseListField(json['words_array']),
+      wordsArrayNt: parseListField(json['words_array_nt']),
+      lineStart: json['line_start'] is int ? json['line_start'] : int.tryParse(json['line_start']?.toString() ?? '') ?? 0,
+      lineEnd: json['line_end'] is int ? json['line_end'] : int.tryParse(json['line_end']?.toString() ?? '') ?? 0,
+      page: json['page'] is int ? json['page'] : int.tryParse(json['page']?.toString() ?? '') ?? 0,
+      juz: json['juz'] is int ? json['juz'] : int.tryParse(json['juz']?.toString() ?? '') ?? 0,
     );
   }
 }

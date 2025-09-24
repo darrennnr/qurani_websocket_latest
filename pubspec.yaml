@@ -27,7 +27,7 @@ dependencies:
   mic_stream: ^0.7.2
   connectivity_plus: ^7.0.0
   web_socket_channel: ^3.0.3
-  dio: ^5.9.0
+  collection: ^1.19.1
 
 dependency_overrides:
   speech_to_text: 7.1.0
