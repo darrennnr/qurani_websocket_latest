@@ -2,9 +2,10 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:vosk_flutter/vosk_flutter.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:vosk_stt/stt/database/db_helper.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
@@ -14,20 +15,15 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:archive/archive.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-import 'package:web_socket_channel/status.dart' as status;
 import 'dart:math' as math;
-
+import '/stt/database/quran_sqlite_service.dart';
 
 class VoskSTTCorrectionPage extends StatefulWidget {
   final int suratId;
-  final String suratName;
+  // suratName sudah dihapus
 
-  const VoskSTTCorrectionPage({
-    Key? key,
-    required this.suratId,
-    required this.suratName,
-  }) : super(key: key);
+  const VoskSTTCorrectionPage({Key? key, required this.suratId})
+    : super(key: key);
 
   @override
   _VoskSTTCorrectionPageState createState() => _VoskSTTCorrectionPageState();
@@ -56,11 +52,21 @@ class AyatProgress {
 class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
     with TickerProviderStateMixin {
   // ==================== FIXED API CONFIGURATki8uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuION ====================
-  static const String API_BASE_URL = 'https://f10a437f5502.ngrok-free.app';
-  static const String WEBSOCKET_URL = 'wss://f10a437f5502.ngrok-free.app/ws';
+  static const String API_BASE_URL = 'https://3c675da91914.ngrok-free.app';
+  static const String WEBSOCKET_URL = 'wss://3c675da91914.ngrok-free.app/ws';
+  static const Duration _apiTimeout = Duration(
+    seconds: 20,
+  ); // Diperpanjang dari 10s
+  static const Duration _websocketTimeout = Duration(
+    seconds: 15,
+  ); // Diperpanjang dari 10s
+  static const Duration _connectionRetryDelay = Duration(seconds: 3);
+  static const int _maxRetryAttempts = 5; // Increased retry attempts
 
   // ==================== TAMBAH DI BAGIAN ATAS CLASS STATE ====================
-
+  String _suratNameArabic = '';
+  String _suratNameSimple = '';
+  String _suratVersesCount = '';
   // Core STT Configuration
   static const int _sampleRate = 16000;
   static const Duration _processingInterval = Duration(milliseconds: 50);
@@ -86,7 +92,7 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
   late final Random _random;
 
   // Supabase client
-  final SupabaseClient _supabase = Supabase.instance.client;
+  final QuranSQLiteService _sqliteService = QuranSQLiteService();
 
   // Progress tracking
   Map<int, AyatProgress> _ayatProgress = {};
@@ -104,20 +110,13 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
   late AnimationController _waveController;
   late List<GlobalKey> _ayatKeys;
 
-// UI State
-bool _hideUnreadAyat = false;
-bool _isQuranMode = true;
-int _currentPage = 1;
-List<AyatData> _currentPageAyats = [];
-bool _showAdvancedStats = false;
-bool _isUIVisible = true; // ⭐ TAMBAH INI
-  
-
-  // Surah info
-  String _suratInfo = '';
-  String _suratArti = '';
-  String _suratTempatTurun = '';
-  String _suratDeskripsi = '';
+  // UI State
+  bool _hideUnreadAyat = false;
+  bool _isQuranMode = true;
+  int _currentPage = 1;
+  List<AyatData> _currentPageAyats = [];
+  bool _showAdvancedStats = false;
+  bool _isUIVisible = true; // ← TAMBAHKAN BARIS INI
 
   // Auto features
   bool _autoSendEnabled = true;
@@ -157,8 +156,6 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
   Timer? _connectionTimeoutTimer;
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 3; // Kurangi dari 5 ke 3
-  static const Duration _connectionTimeout = Duration(seconds: 10);
-  static const Duration _heartbeatInterval = Duration(seconds: 30);
 
   // ==================== CONTINUOUS STT VARIABLES ====================
   String _liveTranscript = '';
@@ -192,7 +189,7 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
     );
 
     try {
-      // Prepare request data
+      // Prepare request data sesuai API docs
       final requestData = {
         'user_id': 'flutter_app_${DateTime.now().millisecondsSinceEpoch}',
         'mode': 'surah',
@@ -203,11 +200,9 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
         'data': {},
       };
 
-      _detailedLog(
-        'API_SESSION',
-        'Request data prepared: ${jsonEncode(requestData)}',
-      );
+      _detailedLog('API_SESSION', 'Request data: ${jsonEncode(requestData)}');
 
+      // PERBAIKAN: Enhanced headers dan timeout
       final response = await http
           .post(
             Uri.parse(
@@ -215,53 +210,70 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
             ),
             headers: {
               'Content-Type': 'application/json',
-              'ngrok-skip-browser-warning': 'true',
               'Accept': 'application/json',
+              'ngrok-skip-browser-warning': 'true',
+              'User-Agent': 'Flutter-Qurani-STT/1.0',
+              'Cache-Control': 'no-cache',
             },
             body: jsonEncode(requestData),
           )
-          .timeout(Duration(seconds: 10));
+          .timeout(_apiTimeout); // PERBAIKAN: Timeout diperpanjang
 
-      _detailedLog(
-        'API_SESSION',
-        'HTTP Response Status: ${response.statusCode}',
-      );
-      _detailedLog('API_SESSION', 'HTTP Response Body: ${response.body}');
+      _detailedLog('API_SESSION', 'HTTP Status: ${response.statusCode}');
+      _detailedLog('API_SESSION', 'HTTP Body: ${response.body}');
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      // PERBAIKAN: Better status code handling
+      if (response.statusCode >= 200 && response.statusCode < 300) {
         final responseData = jsonDecode(response.body);
-        _activeSessionId = responseData['sessionId'];
-        _isSessionActive = true;
 
-        _detailedLog(
-          'API_SESSION',
-          'Session initialized successfully - ID: $_activeSessionId',
-        );
-        _logAPICall(
-          'POST',
-          '/live/start',
-          response.statusCode,
-          'Session started successfully',
-        );
+        // Validate response structure sesuai API docs
+        if (responseData['sessionId'] != null) {
+          _activeSessionId = responseData['sessionId'];
+          _isSessionActive = true;
 
-        // Initialize WebSocket connection after successful session
-        await _initializeWebSocketConnection();
+          _detailedLog('API_SESSION', 'Session ID: $_activeSessionId');
+          _logAPICall('POST', '/live/start', response.statusCode, 'Success');
 
-        setState(() {});
-        _showSnackBar('API Session Started Successfully', SnackBarType.success);
+          // Initialize WebSocket setelah session berhasil
+          await _initializeWebSocketConnection();
+
+          setState(() {});
+          _showSnackBar('API Session Started', SnackBarType.success);
+        } else {
+          throw Exception('Invalid response: missing sessionId');
+        }
       } else {
         throw Exception('HTTP ${response.statusCode}: ${response.body}');
       }
-    } catch (e) {
-      _detailedLog(
-        'API_SESSION',
-        'CRITICAL ERROR: Failed to initialize session - $e',
+    } on TimeoutException catch (e) {
+      _detailedLog('API_SESSION', 'TIMEOUT ERROR: $e');
+      _logAPICall('POST', '/live/start', 0, 'Timeout: $e');
+
+      // PERBAIKAN: Retry logic untuk timeout
+      if (_reconnectAttempts < _maxRetryAttempts) {
+        _detailedLog('API_SESSION', 'Retrying session initialization...');
+        _reconnectAttempts++;
+
+        await Future.delayed(_connectionRetryDelay);
+        await _initializeAPISession(); // Retry
+        return;
+      }
+
+      _isSessionActive = false;
+      _showSnackBar(
+        'Connection timeout. Check your internet.',
+        SnackBarType.error,
       );
+      throw Exception(
+        'Session initialization timeout after $_maxRetryAttempts attempts',
+      );
+    } catch (e) {
+      _detailedLog('API_SESSION', 'ERROR: $e');
       _logAPICall('POST', '/live/start', 0, 'Error: $e');
       _isSessionActive = false;
       _activeSessionId = null;
       setState(() {});
-      _showSnackBar('Failed to start API session: $e', SnackBarType.error);
+      _showSnackBar('Failed to start session: $e', SnackBarType.error);
       rethrow;
     }
   }
@@ -286,91 +298,91 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
 
   Future<void> _initializeWebSocketConnection() async {
     if (_activeSessionId == null) {
-      _detailedLog(
-        'WEBSOCKET',
-        'CRITICAL ERROR: Cannot initialize - no active session ID',
-      );
+      _detailedLog('WEBSOCKET', 'ERROR: No active session ID');
       return;
     }
 
     try {
-      // FIXED: Use proper WSS URL format
-      final wsUrl = 'wss://f10a437f5502.ngrok-free.app/ws/$_activeSessionId';
-      _detailedLog('WEBSOCKET', 'Attempting connection to: $wsUrl');
+      // PERBAIKAN: WebSocket URL sesuai standar
+      // Karena API docs tidak mendokumentasikan WebSocket endpoint,
+      // kita coba beberapa kemungkinan endpoint
+      final possibleEndpoints = [
+        'wss://3c675da91914.ngrok-free.app/ws/$_activeSessionId', // GANTI URL
+        'wss://3c675da91914.ngrok-free.app/live/ws/$_activeSessionId', // GANTI URL
+        'wss://3c675da91914.ngrok-free.app/ws/live/$_activeSessionId', // GANTI URL
+      ];
 
-      // Close existing connection if any
+      String wsUrl = possibleEndpoints[0]; // Coba endpoint pertama dulu
+      _detailedLog('WEBSOCKET', 'Connecting to: $wsUrl');
+
       await _closeWebSocketConnection();
 
-      // FIXED: Connect with proper headers and timeout
+      // PERBAIKAN: Enhanced WebSocket connection dengan proper headers
       final socket = await WebSocket.connect(
         wsUrl,
         headers: {
           'ngrok-skip-browser-warning': 'true',
           'User-Agent': 'Flutter-WebSocket-Client/1.0',
-          'Sec-WebSocket-Protocol': 'echo-protocol', // Add protocol if needed
+          'Origin': 'flutter-app',
+          'Sec-WebSocket-Protocol': 'echo-protocol',
         },
-      ).timeout(Duration(seconds: 10));
+      ).timeout(_websocketTimeout);
 
-      // Wrap into WebSocketChannel
       _webSocketChannel = IOWebSocketChannel(socket);
-      _detailedLog('WEBSOCKET', 'WebSocket channel created successfully');
+      _detailedLog('WEBSOCKET', 'WebSocket connected successfully');
 
-      // Set connection timeout
-      _connectionTimeoutTimer = Timer(Duration(seconds: 5), () {
+      // PERBAIKAN: Connection timeout handler
+      _connectionTimeoutTimer = Timer(_websocketTimeout, () {
         if (!_isWebSocketConnected) {
-          _detailedLog('WEBSOCKET', 'Connection timeout - marking as failed');
+          _detailedLog('WEBSOCKET', 'Connection timeout');
           _handleWebSocketError('Connection timeout');
         }
       });
 
-      // FIXED: Improved stream listener
+      // PERBAIKAN: Enhanced stream listener
       _webSocketChannel!.stream.listen(
         (data) {
           _connectionTimeoutTimer?.cancel();
 
-          // Mark as connected on first message
           if (!_isWebSocketConnected) {
             _isWebSocketConnected = true;
             _reconnectAttempts = 0;
-            _detailedLog('WEBSOCKET', 'Connection established successfully');
+            _detailedLog('WEBSOCKET', 'Connected successfully');
             _startHeartbeat();
-            if (mounted) setState(() {});
 
-            // Send initial connection message
+            // Send initial handshake
             _sendWebSocketMessage({
-              'type': 'client_connected',
+              'type': 'connect',
               'session_id': _activeSessionId,
-              'client_info': 'Flutter-STT-Client',
+              'client_type': 'flutter_stt',
             });
+
+            if (mounted) setState(() {});
           }
 
           _handleWebSocketMessage(data);
         },
         onError: (error) {
           _connectionTimeoutTimer?.cancel();
-          _detailedLog('WEBSOCKET', 'STREAM ERROR: $error');
-          _isWebSocketConnected = false;
+          _detailedLog('WEBSOCKET', 'Stream error: $error');
           _handleWebSocketError(error);
         },
         onDone: () {
           _connectionTimeoutTimer?.cancel();
-          _detailedLog('WEBSOCKET', 'Connection closed by server');
+          _detailedLog('WEBSOCKET', 'Connection closed');
           _isWebSocketConnected = false;
           if (mounted) setState(() {});
 
-          // Only attempt reconnection if session is still active
-          if (_isSessionActive && _reconnectAttempts < _maxReconnectAttempts) {
+          // Auto-reconnect logic
+          if (_isSessionActive && _reconnectAttempts < _maxRetryAttempts) {
             _attemptReconnection();
           }
         },
         cancelOnError: false,
       );
-
-      // Wait a moment for connection to establish
-      await Future.delayed(Duration(milliseconds: 500));
     } catch (e) {
       _connectionTimeoutTimer?.cancel();
-      _detailedLog('WEBSOCKET', 'CONNECTION FAILED: $e');
+      _detailedLog('WEBSOCKET', 'Connection failed: $e');
       _isWebSocketConnected = false;
       _handleWebSocketError(e);
       if (mounted) setState(() {});
@@ -385,8 +397,9 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
       final messageType = messageData['type'];
 
       switch (messageType) {
-        case 'connection_acknowledged':
-          _detailedLog('WEBSOCKET', 'Connection acknowledged by server');
+        case 'connection_ack':
+        case 'connected':
+          _detailedLog('WEBSOCKET', 'Connection acknowledged');
           break;
 
         case 'transcript_result':
@@ -394,6 +407,7 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
           _successfulAPIResponses++;
           break;
 
+        case 'word_result':
         case 'word_feedback':
           _handleWordFeedback(messageData);
           break;
@@ -403,12 +417,13 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
           break;
 
         case 'error':
-          final errorMsg = messageData['message'] ?? 'Unknown error';
-          _detailedLog('WEBSOCKET_ERROR', 'API Error: $errorMsg');
-          _showSnackBar('API Error: $errorMsg', SnackBarType.error);
+          final errorMsg = messageData['message'] ?? 'Unknown WebSocket error';
+          _detailedLog('WEBSOCKET_ERROR', 'Server error: $errorMsg');
+          _showSnackBar('Server Error: $errorMsg', SnackBarType.error);
           break;
 
-        case 'heartbeat_response':
+        case 'heartbeat_ack':
+        case 'pong':
           _detailedLog('WEBSOCKET', 'Heartbeat acknowledged');
           break;
 
@@ -422,7 +437,6 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
       _detailedLog('WEBSOCKET_RECEIVE', 'Error parsing message: $e');
     }
   }
-
   // ==================== IMPROVED ERROR HANDLING ====================
 
   void _handleWebSocketError(dynamic error) {
@@ -761,51 +775,83 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
 
   // REPLACE method: _sendFinalTranscript()
   void _sendFinalTranscript(String transcript) {
-    if (transcript.trim().isEmpty) {
-      return;
-    }
+    if (transcript.trim().isEmpty) return;
 
-    // Normalize for deduplication check
     final normalizedTranscript = _normalizeTranscript(transcript);
     final normalizedLast = _normalizeTranscript(_lastSentTranscript);
 
     if (normalizedTranscript == normalizedLast ||
         normalizedTranscript.length < 3) {
-      _detailedLog(
-        'TRANSCRIPT_SEND',
-        'Skipping duplicate/short transcript: "$transcript"',
-      );
+      _detailedLog('TRANSCRIPT_SEND', 'Skipping duplicate: "$transcript"');
       return;
     }
 
-    _detailedLog('TRANSCRIPT_SEND', 'Sending final transcript: "$transcript"');
+    _detailedLog('TRANSCRIPT_SEND', 'Sending: "$transcript"');
 
-    // WEBSOCKET ONLY - No HTTP fallback
-    if (_isWebSocketConnected) {
+    // PERBAIKAN: WebSocket-first approach dengan HTTP fallback
+    if (_isWebSocketConnected && _webSocketChannel != null) {
+      // Primary: Send via WebSocket
       _sendWebSocketMessage({
         'type': 'final_transcript',
         'session_id': _activeSessionId,
         'transcript': transcript,
         'surah_id': widget.suratId,
         'ayah': _currentAyatNumber,
+        'timestamp': DateTime.now().toIso8601String(),
       });
 
       _lastSentTranscript = transcript;
-      _detailedLog('WEBSOCKET_SEND', 'Final transcript sent: "$transcript"');
+      _totalTranscriptsSent++;
     } else {
+      // PERBAIKAN: HTTP fallback sesuai API docs
+      _sendTranscriptViaHTTP(transcript);
+    }
+  }
+
+  // TAMBAH method baru untuk HTTP fallback:
+  Future<void> _sendTranscriptViaHTTP(String transcript) async {
+    try {
       _detailedLog(
-        'TRANSCRIPT_SEND',
-        'WebSocket not connected - transcript dropped',
-      );
-      _showSnackBar(
-        'Connection lost - transcript not sent',
-        SnackBarType.error,
+        'HTTP_FALLBACK',
+        'Sending transcript via HTTP: "$transcript"',
       );
 
-      // Try to reconnect immediately
-      if (_isSessionActive) {
-        _initializeWebSocketConnection();
+      final requestBody = {
+        'transcript': transcript,
+        'surah_id': widget.suratId,
+        'ayah': _currentAyatNumber,
+      };
+
+      final response = await http
+          .post(
+            Uri.parse(
+              '$API_BASE_URL/transcript/${widget.suratId}/$_currentAyatNumber',
+            ),
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'ngrok-skip-browser-warning': 'true',
+            },
+            body: jsonEncode(requestBody),
+          )
+          .timeout(_apiTimeout);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final responseData = jsonDecode(response.body);
+        _handleTranscriptResult(responseData);
+        _successfulAPIResponses++;
+        _lastSentTranscript = transcript;
+        _totalTranscriptsSent++;
+
+        _detailedLog('HTTP_FALLBACK', 'Success: ${response.body}');
+        _logAPICall('POST', '/transcript', response.statusCode, 'Success');
+      } else {
+        throw Exception('HTTP ${response.statusCode}: ${response.body}');
       }
+    } catch (e) {
+      _detailedLog('HTTP_FALLBACK', 'Failed: $e');
+      _logAPICall('POST', '/transcript', 0, 'Error: $e');
+      _showSnackBar('Failed to send transcript', SnackBarType.error);
     }
   }
 
@@ -892,7 +938,7 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
                     _liveTranscript,
                     style: TextStyle(
                       fontSize: 14,
-                      fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+                      fontFamily: 'Me_Quran',
                       color: Colors.black87,
                     ),
                     textDirection: TextDirection.rtl,
@@ -955,7 +1001,7 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
   Color _getConnectionStatusColor() {
     if (!_isSessionActive) return errorColor;
     if (_reconnectAttempts > 0) return warningColor;
-    if (!_isWebSocketConnected) return errorColor;
+    if (!_isWebSocketConnected) return warningColor; // Changed from errorColor
     if (!_isListening) return primaryColor;
     return correctColor;
   }
@@ -963,8 +1009,9 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
   String _getConnectionStatusText() {
     if (!_isSessionActive) return 'Session Inactive';
     if (_reconnectAttempts > 0)
-      return 'Reconnecting... (${_reconnectAttempts}/${_maxReconnectAttempts})';
-    if (!_isWebSocketConnected) return 'WebSocket Disconnected';
+      return 'Reconnecting... (${_reconnectAttempts}/$_maxRetryAttempts)';
+    if (!_isWebSocketConnected)
+      return 'WebSocket Connecting... (HTTP Fallback Active)';
     if (!_isListening) return 'Ready (WebSocket Connected)';
     return 'Listening (WebSocket Live)';
   }
@@ -1245,27 +1292,6 @@ bool _isUIVisible = true; // ⭐ TAMBAH INI
     }
   }
 
-  // ---------- NEW: Mushaf rendering cache & settings ----------
-final Map<int, List<Widget>> _pageLinesCache = {}; // page -> list of final line strings
-final TextStyle _mushafTextStyle = const TextStyle(
-  fontSize: 22,
-  fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
-  height: 1.1,
-  letterSpacing: 0.5, // TAMBAH: letter spacing
-);
-  final int _maxLinesPerPage = 15; // TAMBAH: konstanta max baris
-  final double _pageWidth = 0.0; // TAMBAH: akan dikalkulasi dinamis
-  
-  // TAMBAH: Tracking untuk header dan bismillah
-  bool _needsSurahHeader = false;
-  bool _needsBismillah = false;
-  int _previousSurahId = -1;
-
-final int _linesPerPage = 15; // keep default mushaf Madinah
-final double _lineTolerancePx = 1.0; // tolerance when matching widths
-// -----------------------------------------------------------
-
-
   void _handleWordFeedback(Map<String, dynamic> data) {
     _detailedLog('API_RESPONSE', 'Word feedback received: ${jsonEncode(data)}');
 
@@ -1366,7 +1392,7 @@ final double _lineTolerancePx = 1.0; // tolerance when matching widths
     _stopContinuousListening();
     _closeWebSocketConnection();
     _endAPISession();
-
+    _sqliteService.dispose();
     // Cancel ALL timers
     _transcriptSendTimer?.cancel();
     _partialUpdateTimer?.cancel();
@@ -1415,31 +1441,40 @@ final double _lineTolerancePx = 1.0; // tolerance when matching widths
     try {
       _detailedLog('API_SESSION', 'Ending session: $_activeSessionId');
 
+      // Send end session request sesuai API docs
       final response = await http
           .post(
             Uri.parse('$API_BASE_URL/live/end/$_activeSessionId'),
             headers: {
               'Content-Type': 'application/json',
+              'Accept': 'application/json',
               'ngrok-skip-browser-warning': 'true',
             },
           )
-          .timeout(Duration(seconds: 5));
+          .timeout(_apiTimeout);
 
-      if (response.statusCode == 200) {
+      if (response.statusCode >= 200 && response.statusCode < 300) {
         _detailedLog('API_SESSION', 'Session ended successfully');
-        _logAPICall('POST', '/live/end', response.statusCode, 'Session ended');
+        _logAPICall('POST', '/live/end', response.statusCode, 'Success');
       } else {
         _detailedLog(
           'API_SESSION',
-          'Error ending session - HTTP ${response.statusCode}: ${response.body}',
+          'End session error: ${response.statusCode} - ${response.body}',
+        );
+        _logAPICall(
+          'POST',
+          '/live/end',
+          response.statusCode,
+          'Error: ${response.body}',
         );
       }
     } catch (e) {
       _detailedLog('API_SESSION', 'Error ending session: $e');
+      _logAPICall('POST', '/live/end', 0, 'Error: $e');
     } finally {
       _activeSessionId = null;
       _isSessionActive = false;
-      setState(() {});
+      if (mounted) setState(() {});
     }
   }
 
@@ -1712,7 +1747,7 @@ final double _lineTolerancePx = 1.0; // tolerance when matching widths
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'You have completed reading ${widget.suratName}',
+                      'You have completed reading $_suratNameSimple', // BENAR
                       style: const TextStyle(fontSize: 14),
                       textAlign: TextAlign.center,
                     ),
@@ -1972,181 +2007,6 @@ final double _lineTolerancePx = 1.0; // tolerance when matching widths
     }
   }
 
-  // ---------- NEW: Measurement & Justify Helpers ----------
-
-double _measureTextWidth(String text, TextStyle style) {
-  final tp = TextPainter(
-    text: TextSpan(text: text, style: style),
-    textDirection: TextDirection.rtl,
-    textScaleFactor: MediaQuery.of(context).textScaleFactor,
-  );
-  tp.layout(); // unconstrained
-  return tp.width;
-}
-
-/// Simple heuristic to detect kashida-allowed positions in an Arabic word.
-/// This is a heuristic: we avoid non-joining letters like ا د ذ ر ز و and punctuation.
-List<int> _kashidaSlotsInWord(String word) {
-  final nonJoining = <String>{'ا', 'د', 'ذ', 'ر', 'ز', 'و', 'إ', 'أ', 'آ', 'ء', 'ؤ', 'ئ'};
-  List<int> slots = [];
-  for (int i = 0; i < word.length - 1; i++) {
-    final ch = word[i];
-    final nxt = word[i + 1];
-    if (ch.trim().isEmpty || nxt.trim().isEmpty) continue;
-    if (!nonJoining.contains(ch) && !RegExp(r'[\u0600-\u06FF]').hasMatch(ch) == false) {
-      // rough check — if both are arabic letters and left-join possible
-      slots.add(i + 1); // slot after char i
-    } else {
-      // still allow many cases; we keep heuristic permissive
-      if (!nonJoining.contains(ch) && RegExp(r'[\u0600-\u06FF]').hasMatch(ch)) {
-        slots.add(i + 1);
-      }
-    }
-  }
-  return slots;
-}
-
-/// Insert tatweel(s) in a given word at a slot index
-String _insertKashidaAtSlot(String word, int slotIndex, int count) {
-  if (slotIndex < 0 || slotIndex > word.length) return word;
-  final k = '\u0640' * count;
-  return word.substring(0, slotIndex) + k + word.substring(slotIndex);
-}
-
-/// Justify a line string to targetWidth using kashida insertion (heuristic).
-/// lineTokens = list of words (already in order). Returns final string that will be rendered.
-String _justifyLineWithKashida(List<String> lineTokens, double targetWidth, TextStyle style) {
-  if (lineTokens.isEmpty) return '';
-  String joinWithSingleSpace(List<String> toks) => toks.join(' ');
-  String candidate = joinWithSingleSpace(lineTokens);
-  double measured = _measureTextWidth(candidate, style);
-  if ((targetWidth - measured).abs() <= _lineTolerancePx) return candidate;
-
-  // If overflow, return candidate (caller should handle overflow by re-segmenting)
-  if (measured > targetWidth) {
-    return candidate;
-  }
-
-  double deficit = targetWidth - measured;
-
-  // Find all slots across words
-  List<Map<String, dynamic>> slots = []; // {wordIndex, slotIndex}
-  for (int wi = 0; wi < lineTokens.length; wi++) {
-    final w = lineTokens[wi];
-    final localSlots = _kashidaSlotsInWord(w);
-    for (final s in localSlots) {
-      slots.add({'wordIndex': wi, 'slotIndex': s});
-    }
-  }
-
-  if (slots.isEmpty) {
-    // fallback: increase spaces uniformly
-    // We'll return original and let rendering use wordSpacing fallback if needed
-    return candidate;
-  }
-
-  // measure one kashida unit roughly by inserting one into first slot and measuring delta
-  final first = slots.first;
-  final tmpTokens = List<String>.from(lineTokens);
-  tmpTokens[first['wordIndex']] =
-      _insertKashidaAtSlot(tmpTokens[first['wordIndex']], first['slotIndex'], 1);
-  final widthWithOne = _measureTextWidth(joinWithSingleSpace(tmpTokens), style);
-  final kashidaUnit = (widthWithOne - measured).clamp(0.5, 40.0); // avoid zero
-
-  int needed = (deficit / kashidaUnit).ceil();
-
-  // distribute needed kashida across available slots, one by one
-  int maxPerSlot = 4;
-  int remaining = needed;
-  int slotPtr = 0;
-  final appliedCounts = List<int>.filled(slots.length, 0);
-  while (remaining > 0 && slotPtr < 10000) {
-    final idx = slotPtr % slots.length;
-    if (appliedCounts[idx] < maxPerSlot) {
-      final s = slots[idx];
-      final wi = s['wordIndex'] as int;
-      final si = s['slotIndex'] as int;
-      lineTokens[wi] = _insertKashidaAtSlot(lineTokens[wi], si + appliedCounts[idx], 1);
-      appliedCounts[idx] += 1;
-      remaining--;
-      // recompute measured every N insertions to be safe (costly but safe)
-      if (remaining % 5 == 0 || remaining == 0) {
-        final joined = joinWithSingleSpace(lineTokens);
-        measured = _measureTextWidth(joined, style);
-        deficit = targetWidth - measured;
-        if (deficit <= _lineTolerancePx) return joined;
-      }
-    }
-    slotPtr++;
-    if (slotPtr > slots.length * maxPerSlot * 3) break; // safety
-  }
-
-  // final measurement and return
-  final finalJoined = joinWithSingleSpace(lineTokens);
-  // If still narrower, we return finalJoined; caller may apply small wordSpacing.
-  return finalJoined;
-}
-
-/// Build per-line final strings for a given page
-Future<List<String>> _buildPageLinesCache(int page, List<AyatData> pageAyats) async {
-  final lines = <String>[];
-
-  // line number in mushaf pages commonly start at 1..15 per page
-  // We'll iterate through all ayats on the page, using their lineStart/lineEnd if present
-  for (final ayat in pageAyats) {
-    final tokens = (ayat.wordsArray.isNotEmpty ? ayat.wordsArray : ayat.wordsArrayNt.isNotEmpty ? ayat.wordsArrayNt : ayat.arabic.split(RegExp(r'\s+'))).where((t) => t.trim().isNotEmpty).toList();
-    final L = (ayat.lineEnd - ayat.lineStart + 1).clamp(1, 50);
-    if (L <= 1) {
-      // whole ayah in one line
-      lines.add(tokens.join(' '));
-      continue;
-    }
-
-    // Simple segmentation: evenly distribute tokens into L segments (heuristic).
-    // Better: DP (cost minimization). For speed & deterministic output we start with even distribution.
-    int n = tokens.length;
-    int base = n ~/ L;
-    int rem = n % L;
-    int ptr = 0;
-    for (int i = 0; i < L; i++) {
-      int take = base + (i < rem ? 1 : 0);
-      if (take <= 0) {
-        // ensure at least 1 token per line if possible
-        if (ptr < n) {
-          take = 1;
-        } else {
-          take = 0;
-        }
-      }
-      final seg = tokens.sublist(ptr, min(ptr + take, n));
-      ptr += take;
-      if (seg.isEmpty) continue;
-      lines.add(seg.join(' '));
-    }
-
-    // If any tokens remain (rare), append to last line
-    if (ptr < n) {
-      final last = lines.removeLast();
-      final remainder = tokens.sublist(ptr).join(' ');
-      lines.add('$last $remainder');
-    }
-  }
-
-  // Now we attempt to justify each line to page width using kashida heuristics.
-  final renderBox = context.findRenderObject();
-  double maxWidth = MediaQuery.of(context).size.width - 32; // account padding (as in your UI uses 16 left/right)
-  final finalLines = <String>[];
-  for (final l in lines) {
-    final tokenList = l.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-    final candidate = _justifyLineWithKashida(List<String>.from(tokenList), maxWidth, _mushafTextStyle);
-    finalLines.add(candidate);
-  }
-
-  return finalLines;
-}
-// -----------------------------------------------------------
-
-
   // ==================== ENHANCED INITIALIZATION ====================
 
   Future<void> _initializeApp() async {
@@ -2158,10 +2018,15 @@ Future<List<String>> _buildPageLinesCache(int page, List<AyatData> pageAyats) as
       });
 
       await _requestEnhancedPermissions();
+
+      // TAMBAHAN: Initialize SQLite service first
+      await _sqliteService.initialize();
+      _log('APP: SQLite service initialized');
+
       await _initializeVosk();
       await _setupEnhancedVoskModel();
       await _setupEnhancedRecognizer();
-      await _loadAyatData();
+      await _loadAyatData(); // This now uses SQLite instead of Supabase
 
       setState(() {
         _isLoading = false;
@@ -2297,44 +2162,28 @@ Future<List<String>> _buildPageLinesCache(int page, List<AyatData> pageAyats) as
     _log('DATA: Loading ayat data for surah_id ${widget.suratId}');
 
     try {
-      // Load ayat data with page information
-      final response = await _supabase
-          .from('m10_quran_ayah')
-          .select(
-            'surah_id, ayah, arabic, no_tashkeel, transliteration, words_array_nt, page, juz, quarter_hizb',
-          )
-          .eq('surah_id', widget.suratId)
-          .order('ayah', ascending: true);
+      // Initialize SQLite service
+      await _sqliteService.initialize();
 
-      if (response.isEmpty) {
-        throw Exception('No ayat found for surah ${widget.suratId}');
-      }
+      // Load surah info from metadata database
+      // Load surah info dari database
+      final chapter = await _sqliteService.getChapterInfo(widget.suratId);
 
-      // Load surah info
-      final surahResponse = await _supabase
-          .from('surat')
-          .select('nama, namalatin, jumlahayat, tempatturun, arti, deskripsi')
-          .eq('id', widget.suratId)
-          .single();
+      // Load ayat data with words from uthmani database
+      _ayatList = await _sqliteService.getSurahAyatData(widget.suratId);
 
-      final surahNama = surahResponse['nama'] ?? widget.suratName;
-      final surahNamalatin = surahResponse['namalatin'] ?? '';
-      final jumlahAyat = surahResponse['jumlahayat'] ?? response.length;
-
-      _suratArti = surahResponse['arti'] ?? '';
-      _suratTempatTurun = surahResponse['tempatturun'] ?? '';
-      _suratDeskripsi = surahResponse['deskripsi'] ?? '';
-
-      _suratInfo =
-          '$surahNama${surahNamalatin.isNotEmpty ? ' ($surahNamalatin)' : ''} (1-$jumlahAyat)';
-
-      _ayatList = response.map((data) => AyatData.fromJson(data)).toList();
+      // Set data surat dari database
+      setState(() {
+        _suratNameArabic = chapter.nameArabic;
+        _suratNameSimple = chapter.nameSimple;
+        _suratVersesCount = chapter.versesCount.toString();
+      });
 
       // Set initial page and ayat
       if (_ayatList.isNotEmpty) {
         _currentPage = _ayatList.first.page;
         _currentAyatNumber = _ayatList.first.ayah;
-        _loadCurrentPageAyats();
+        await _loadCurrentPageAyats();
       }
 
       _ayatKeys = List.generate(_ayatList.length, (index) => GlobalKey());
@@ -2346,37 +2195,26 @@ Future<List<String>> _buildPageLinesCache(int page, List<AyatData> pageAyats) as
     }
   }
 
-Future<void> _loadCurrentPageAyats() async {
-  if (!_isQuranMode) {
-    _currentPageAyats = _ayatList;
-    return;
-  }
+  Future<void> _loadCurrentPageAyats() async {
+    if (!_isQuranMode) {
+      _currentPageAyats = _ayatList;
+      return;
+    }
 
-  try {
-    // EDIT: Ensure line_start and line_end are loaded
-    final response = await _supabase
-        .from('m10_quran_ayah')
-        .select(
-          'surah_id, ayah, arabic, no_tashkeel, transliteration, words_array, words_array_nt, line_start, line_end, page, juz, quarter_hizb'
-        )
-        .eq('page', _currentPage)
-        .order('surah_id', ascending: true)
-        .order('ayah', ascending: true);
+    try {
+      // Use SQLite service to get current page ayats
+      _currentPageAyats = await _sqliteService.getCurrentPageAyats(
+        _currentPage,
+      );
 
-    _currentPageAyats = response
-        .map((data) => AyatData.fromJson(data))
-        .toList();
-        
-    _log('DATA: Loaded ${_currentPageAyats.length} ayats for page $_currentPage');
-    
-    // Clear cache untuk refresh
-    _pageLinesCache.remove(_currentPage);
-    
-  } catch (e) {
-    _log('DATA: Error loading page ayats - $e');
-    _currentPageAyats = [];
+      _log(
+        'DATA: Loaded ${_currentPageAyats.length} ayats for page $_currentPage',
+      );
+    } catch (e) {
+      _log('DATA: Error loading page ayats - $e');
+      _currentPageAyats = [];
+    }
   }
-}
 
   void _performIntelligentNavigation() {
     if (!_scrollController.hasClients ||
@@ -2421,123 +2259,146 @@ Future<void> _loadCurrentPageAyats() async {
 
   // ==================== UI BUILD METHODS ====================
 
-@override
-Widget build(BuildContext context) {
-  return Scaffold(
-    backgroundColor: backgroundColor,
-    appBar: _isUIVisible ? _buildEnhancedAppBar() : null, // ⭐ CONDITIONAL
-    body: GestureDetector( // ⭐ WRAP DENGAN GESTUREDETECTOR
-      onTap: _toggleUIVisibility,
-      behavior: HitTestBehavior.translucent,
-      child: _isLoading
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: backgroundColor,
+      // MODIFIKASI: AppBar hanya tampil jika _isUIVisible = true
+      appBar: _isUIVisible ? _buildEnhancedAppBar() : null,
+      body: _isLoading
           ? _buildEnhancedLoadingWidget()
           : _errorMessage.isNotEmpty && !_isListening
           ? _buildEnhancedErrorWidget()
-          : Column(
-              children: [
-                Expanded(child: _buildEnhancedMainContent()),
-                if (_showLogs) _buildEnhancedLogsPanel(),
-              ],
-            ),
-    ),
-  );
-}
-
-  PreferredSizeWidget _buildEnhancedAppBar() {
-    return AppBar(
-      backgroundColor: primaryColor,
-      foregroundColor: Colors.white,
-      elevation: 0,
-      title: Padding(
-        padding: const EdgeInsets.only(left: 15),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const Icon(Icons.menu, size: 24, color: Colors.white),
-            const SizedBox(width: 12),
-            Expanded(
+          : GestureDetector(
+              // TAMBAHAN: GestureDetector untuk mendeteksi tap
+              onTap: () {
+                setState(() {
+                  _isUIVisible = !_isUIVisible; // Toggle UI visibility
+                });
+              },
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text(
-                    'Qurani Hafidz',
-                    style: TextStyle(fontSize: 16, height: 1.2),
-                  ),
-                  Text(
-                    'Surat Yasin 36 - 83 Ayat ${_isSessionActive ? "• API Connected" : "• API Disconnected"}',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w400,
-                      height: 1.2,
-                      color: _isSessionActive
-                          ? Colors.greenAccent
-                          : Colors.redAccent,
-                    ),
-                  ),
+                  Expanded(child: _buildEnhancedMainContent()),
+                  if (_showLogs && _isUIVisible) _buildEnhancedLogsPanel(),
                 ],
               ),
+            ),
+    );
+  }
+
+  PreferredSizeWidget _buildEnhancedAppBar() {
+    // TAMBAHAN: Animated opacity untuk smooth transition
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(kToolbarHeight),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: _isUIVisible ? 1.0 : 0.0,
+        child: AppBar(
+          backgroundColor: primaryColor,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          title: Padding(
+            padding: const EdgeInsets.only(left: 15),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Icon(Icons.menu, size: 24, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'Qurani Hafidz',
+                        style: TextStyle(fontSize: 16, height: 1.2),
+                      ),
+                      Text(
+                        'Surat $_suratNameSimple ${widget.suratId} - $_suratVersesCount Ayat',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w400,
+                          height: 1.2,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          titleSpacing: 0,
+          actions: [
+            // API Status indicator
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              child: Icon(
+                _isWebSocketConnected ? Icons.wifi : Icons.wifi_off,
+                color: _isWebSocketConnected
+                    ? Colors.greenAccent
+                    : Colors.redAccent,
+                size: 20,
+              ),
+            ),
+
+            // Toggle mode button
+            IconButton(
+              icon: Icon(
+                _isQuranMode ? Icons.menu_book : Icons.view_list,
+                size: 20,
+              ),
+              onPressed: () async {
+                setState(() {
+                  _isQuranMode = !_isQuranMode;
+                });
+                await _loadCurrentPageAyats();
+              },
+              tooltip: _isQuranMode
+                  ? 'Switch to List Mode'
+                  : 'Switch to Mushaf Mode',
+            ),
+
+            // Hide/show button
+            IconButton(
+              icon: Icon(
+                _hideUnreadAyat ? Icons.visibility : Icons.visibility_off,
+                size: 20,
+              ),
+              onPressed: () {
+                setState(() {
+                  _hideUnreadAyat = !_hideUnreadAyat;
+                });
+              },
+              tooltip: _hideUnreadAyat ? 'Show All Text' : 'Hide Unread',
+            ),
+
+            PopupMenuButton<String>(
+              onSelected: _handleMenuAction,
+              iconSize: 20,
+              itemBuilder: (BuildContext context) => [
+                const PopupMenuItem(value: 'logs', child: Text('Debug Logs')),
+                const PopupMenuItem(
+                  value: 'api_status',
+                  child: Text('API Status'),
+                ),
+                const PopupMenuItem(
+                  value: 'settings',
+                  child: Text('STT Settings'),
+                ),
+                const PopupMenuItem(
+                  value: 'reset',
+                  child: Text('Reset Session'),
+                ),
+                const PopupMenuItem(
+                  value: 'export',
+                  child: Text('Export Session'),
+                ),
+              ],
             ),
           ],
         ),
       ),
-      titleSpacing: 0,
-      actions: [
-        // API Status indicator
-        Container(
-          margin: const EdgeInsets.only(right: 8),
-          child: Icon(
-            _isWebSocketConnected ? Icons.wifi : Icons.wifi_off,
-            color: _isWebSocketConnected
-                ? Colors.greenAccent
-                : Colors.redAccent,
-            size: 20,
-          ),
-        ),
-
-        // Toggle mode button
-        IconButton(
-          icon: Icon(
-            _isQuranMode ? Icons.menu_book : Icons.view_list,
-            size: 20,
-          ),
-          onPressed: () async {
-            setState(() {
-              _isQuranMode = !_isQuranMode;
-            });
-            await _loadCurrentPageAyats();
-          },
-          tooltip: _isQuranMode
-              ? 'Switch to List Mode'
-              : 'Switch to Mushaf Mode',
-        ),
-
-        // Hide/show button
-        IconButton(
-          icon: Icon(
-            _hideUnreadAyat ? Icons.visibility : Icons.visibility_off,
-            size: 20,
-          ),
-          onPressed: () {
-            setState(() {
-              _hideUnreadAyat = !_hideUnreadAyat;
-            });
-          },
-          tooltip: _hideUnreadAyat ? 'Show All Text' : 'Hide Unread',
-        ),
-
-        PopupMenuButton<String>(
-          onSelected: _handleMenuAction,
-          iconSize: 20,
-          itemBuilder: (BuildContext context) => [
-            const PopupMenuItem(value: 'logs', child: Text('Debug Logs')),
-            const PopupMenuItem(value: 'api_status', child: Text('API Status')),
-            const PopupMenuItem(value: 'settings', child: Text('STT Settings')),
-            const PopupMenuItem(value: 'reset', child: Text('Reset Session')),
-            const PopupMenuItem(value: 'export', child: Text('Export Session')),
-          ],
-        ),
-      ],
     );
   }
 
@@ -2561,49 +2422,35 @@ Widget build(BuildContext context) {
     }
   }
 
-Widget _buildEnhancedMainContent() {
-  return Stack(
-    children: [
-      Column(
-        children: [
-          // ⭐ CONDITIONAL STATUS PANELS
-          if (_isUIVisible && (_isListening || _showAdvancedStats))
-            _buildRealtimeStatusPanel(),
+  Widget _buildEnhancedMainContent() {
+    return Stack(
+      children: [
+        Column(
+          children: [
+            // MODIFIKASI: Real-time Status Panel hanya tampil jika UI visible
+            if ((_isListening || _showAdvancedStats) && _isUIVisible)
+              _buildRealtimeStatusPanel(),
 
-          if (_isUIVisible && _showAdvancedStats) 
-            _buildAPIStatsPanel(),
+            // MODIFIKASI: API Status panel hanya tampil jika UI visible
+            if (_showAdvancedStats && _isUIVisible) _buildAPIStatsPanel(),
 
-          // ⭐ QURAN TEXT dengan conditional padding
-          Expanded(
-            flex: 4,
-            child: Padding(
-              padding: EdgeInsets.only(
-                bottom: _isUIVisible ? 80 : 0, // Dynamic padding
+            // Quran text tetap di tempatnya
+            Expanded(
+              flex: 4,
+              child: Padding(
+                // MODIFIKASI: Padding bottom hanya diterapkan jika UI visible
+                padding: EdgeInsets.only(bottom: _isUIVisible ? 80 : 0),
+                child: Center(child: _buildEnhancedQuranText()),
               ),
-              child: _buildEnhancedQuranText(),
             ),
-          ),
-        ],
-      ),
-      // ⭐ CONDITIONAL BOTTOM BAR
-      if (_isUIVisible)
-        Positioned(
-          bottom: 0, 
-          left: 0, 
-          right: 0, 
-          child: _buildBottomBar(),
+          ],
         ),
-    ],
-  );
-}
-
-void _toggleUIVisibility() {
-  setState(() {
-    _isUIVisible = !_isUIVisible;
-  });
-  
-  _detailedLog('UI_TOGGLE', _isUIVisible ? 'UI shown' : 'UI hidden');
-}
+        // MODIFIKASI: Bottom bar hanya tampil jika UI visible
+        if (_isUIVisible)
+          Positioned(bottom: 0, left: 0, right: 0, child: _buildBottomBar()),
+      ],
+    );
+  }
 
   Widget _buildBottomBar() {
     return Container(
@@ -2768,172 +2615,74 @@ void _toggleUIVisibility() {
   }
 
   Widget _buildSuratInfoHeader() {
-    if (_suratInfo.isEmpty) return const SizedBox.shrink();
-
-    final parts = _suratInfo.split('(');
-    final nama = parts[0].trim();
-    String namalatin = '';
-    String ayatInfo = '';
-
-    if (parts.length > 1) {
-      final remaining = parts[1];
-      final closeParen = remaining.indexOf(')');
-      if (closeParen > 0) {
-        namalatin = remaining.substring(0, closeParen);
-        final lastPart = remaining.substring(closeParen + 1).trim();
-        if (lastPart.startsWith('(') && lastPart.endsWith(')')) {
-          ayatInfo = lastPart.substring(1, lastPart.length - 1);
-        }
-      }
-    }
-
-    return Column(
-      children: [
-        const SizedBox(height: 2),
-        if (namalatin.isNotEmpty || _suratArti.isNotEmpty)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              _buildOrnament(),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (namalatin.isNotEmpty) ...[
-                      Text(
-                        namalatin,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: primaryColor,
-                        ),
-                      ),
-                      if (_suratArti.isNotEmpty) ...[
-                        Text(
-                          ' • ',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey.shade500,
-                          ),
-                        ),
-                        Text(
-                          _suratArti,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontStyle: FontStyle.italic,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                      ],
-                    ] else if (_suratArti.isNotEmpty) ...[
-                      Text(
-                        _suratArti,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontStyle: FontStyle.italic,
-                          color: Colors.grey.shade600,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              _buildOrnament(),
-            ],
-          ),
-        Container(
-          height: 2,
-          decoration: BoxDecoration(
-            color: Colors.grey.shade200,
-            borderRadius: BorderRadius.circular(1),
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final completedAyat = _ayatProgress.values
-                  .where((p) => p.isCompleted)
-                  .length;
-              final totalAyat = _ayatList.length;
-              final progress = totalAyat > 0 ? completedAyat / totalAyat : 0.0;
-              return Stack(
-                children: [
-                  Container(
-                    width: constraints.maxWidth * progress,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [primaryColor, correctColor],
-                      ),
-                      borderRadius: BorderRadius.circular(1),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 2),
-      ],
-    );
+    return const SizedBox.shrink();
   }
 
-  Widget _buildOrnament() {
+  Widget _buildVerticalModeHeader() {
+    if (_suratNameArabic.isEmpty) return const SizedBox.shrink();
+
     return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        color: primaryColor.withOpacity(0.1),
-        shape: BoxShape.circle,
-        border: Border.all(color: primaryColor.withOpacity(0.2), width: 1),
-      ),
-      child: Center(
-        child: Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: primaryColor.withOpacity(0.3),
-            shape: BoxShape.circle,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Text(
+            'header',
+            style: TextStyle(
+              fontSize:
+                  MediaQuery.of(context).size.width *
+                  0.12, // 12% dari lebar layar
+              fontFamily: 'Quran-Common',
+            ),
+            textAlign: TextAlign.center,
           ),
-        ),
+
+          Text(
+            'surah036',
+            style: const TextStyle(
+              fontSize: 40,
+              fontFamily: 'surah-name-v2',
+              fontWeight: FontWeight.w500,
+              color: Colors.black,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     );
   }
 
-Widget _buildQuranModeDisplay() {
-  return GestureDetector(
-    onHorizontalDragEnd: (DragEndDetails details) {
-      if (details.velocity.pixelsPerSecond.dx > 300) {
-        if (_currentPage > 1) {
-          _navigateToPage(_currentPage + 1);
+  Widget _buildQuranModeDisplay() {
+    return GestureDetector(
+      onHorizontalDragEnd: (DragEndDetails details) {
+        if (details.velocity.pixelsPerSecond.dx > 300) {
+          // Swipe kanan - ke halaman sebelumnya
+          if (_currentPage > 1) {
+            _navigateToPage(_currentPage + 1);
+          }
+        } else if (details.velocity.pixelsPerSecond.dx < -300) {
+          // Swipe kiri - ke halaman berikutnya
+          if (_currentPage < 604) {
+            _navigateToPage(_currentPage - 1);
+          }
         }
-      } else if (details.velocity.pixelsPerSecond.dx < -300) {
-        if (_currentPage < 604) {
-          _navigateToPage(_currentPage - 1);
-        }
-      }
-    },
-    child: _currentPageAyats.isEmpty
-        ? const Center(
-            child: Text(
-              'No ayats found for this page',
-              style: TextStyle(fontSize: 14, color: Colors.grey),
-            ),
-          )
-        : Container( // TAMBAH: Proper container dengan bounds
-            width: double.infinity,
-            height: double.infinity,
-            child: SingleChildScrollView(
+      },
+      child: _currentPageAyats.isEmpty
+          ? const Center(
+              child: Text(
+                'No ayats found for this page',
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+            )
+          : SingleChildScrollView(
               padding: const EdgeInsets.all(0),
               child: Container(
                 decoration: BoxDecoration(
                   color: Color.fromARGB(255, 255, 255, 255),
                 ),
-                // EDIT: Padding yang lebih controlled
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding: const EdgeInsets.all(16),
                 child: Stack(
                   children: [
-                    // Header juz dan page
                     Positioned(
                       top: 0,
                       left: 0,
@@ -2958,360 +2707,98 @@ Widget _buildQuranModeDisplay() {
                         ),
                       ),
                     ),
-                    // EDIT: Padding top untuk content utama
                     Padding(
-                      padding: const EdgeInsets.only(top: 24),
-                      child: _buildMushafLines(),
+                      padding: const EdgeInsets.only(top: 18),
+                      child: _buildContinuousQuranText(),
                     ),
                   ],
                 ),
               ),
             ),
-          ),
-  );
-}
-
-Widget _buildMushafLines() {
-  // Ensure page cache exists
-  if (!_pageLinesCache.containsKey(_currentPage)) {
-    // Build cache asynchronously
-    _buildPageLinesWidgetCache(_currentPage, _currentPageAyats).then((lines) {
-      if (mounted) {
-        setState(() {
-          _pageLinesCache[_currentPage] = lines;
-        });
-      }
-    });
-    
-    // Return loading state
-    return Container(
-      height: 400,
-      child: Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
-        ),
-      ),
     );
   }
 
-  final lineWidgets = _pageLinesCache[_currentPage] ?? [];
-  
-  if (lineWidgets.isEmpty) {
-    return Container(
-      height: 400,
-      child: Center(
-        child: Text(
-          'No content available for this page',
-          style: TextStyle(color: Colors.grey.shade600),
-        ),
-      ),
-    );
-  }
+  Widget _buildContinuousQuranText() {
+    List<Widget> pageElements = [];
 
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: lineWidgets,
-  );
-}
-
-Future<List<Widget>> _buildPageLinesWidgetCache(int page, List<AyatData> pageAyats) async {
-  final List<Widget> lineWidgets = [];
-  int currentLineNumber = 1;
-
-  // TAMBAH: Check apakah perlu header surah dan bismillah
-  _checkForNewSurah(pageAyats);
-  
-  // TAMBAH: Header Surah jika diperlukan (menempati 2 baris)
-  if (_needsSurahHeader && pageAyats.isNotEmpty) {
-    lineWidgets.add(_buildSurahHeaderLine());
-    lineWidgets.add(_buildEmptyLine()); // Line spacing
-    currentLineNumber += 2;
-  }
-  
-  // TAMBAH: Bismillah jika diperlukan (menempati 1 baris)
-  if (_needsBismillah && pageAyats.isNotEmpty) {
-    lineWidgets.add(_buildBismillahLine());
-    currentLineNumber += 1;
-  }
-
-  // Group ayats by line ranges
-  Map<int, List<AyatData>> lineGroups = {};
-  
-  for (final ayat in pageAyats) {
-    for (int lineNum = ayat.lineStart; lineNum <= ayat.lineEnd; lineNum++) {
-      if (!lineGroups.containsKey(lineNum)) {
-        lineGroups[lineNum] = [];
+    Map<int, List<AyatData>> ayatsBySurah = {};
+    for (final ayat in _currentPageAyats) {
+      if (!ayatsBySurah.containsKey(ayat.surah_id)) {
+        ayatsBySurah[ayat.surah_id] = [];
       }
-      lineGroups[lineNum]?.add(ayat);
+      ayatsBySurah[ayat.surah_id]!.add(ayat);
     }
-  }
 
-  // Build lines up to maxLinesPerPage
-  final sortedLineNumbers = lineGroups.keys.toList()..sort();
-  
-  for (final lineNum in sortedLineNumbers) {
-    if (lineWidgets.length >= _maxLinesPerPage) break;
-    
-    final ayatsInLine = lineGroups[lineNum]!;
-    final lineWidget = _buildMushafLineWidget(lineNum, ayatsInLine);
-    lineWidgets.add(lineWidget);
-  }
+    ayatsBySurah.forEach((surahId, ayats) {
+      bool isNewSurah = ayats.any((ayat) => ayat.ayah == 1);
 
-  // TAMBAH: Fill remaining space jika kurang dari 15 baris
-  while (lineWidgets.length < _maxLinesPerPage) {
-    lineWidgets.add(_buildEmptyLine());
-  }
+      if (isNewSurah && surahId != 1 && surahId != 9) {
+        pageElements.add(_buildSurahHeaderInPage(surahId));
+        pageElements.add(_buildBismillahInPage());
+      }
 
-  return lineWidgets;
-}
+      List<InlineSpan> textSpans = [];
 
-// ==================== MODIFIKASI 5: FUNGSI HELPER BARU ====================
+      for (int i = 0; i < ayats.length; i++) {
+        final ayat = ayats[i];
 
-void _checkForNewSurah(List<AyatData> pageAyats) {
-  if (pageAyats.isEmpty) return;
-  
-  final firstSurahId = pageAyats.first.surah_id;
-  
-  // Check if we have a new surah
-  if (_previousSurahId != -1 && _previousSurahId != firstSurahId) {
-    _needsSurahHeader = true;
-    // Bismillah needed for all surahs except Al-Fatiha and At-Taubah
-    _needsBismillah = firstSurahId != 1 && firstSurahId != 9;
-  } else if (_previousSurahId == -1) {
-    // First time loading
-    _needsSurahHeader = pageAyats.any((a) => a.ayah == 1);
-    _needsBismillah = firstSurahId != 1 && firstSurahId != 9 && pageAyats.any((a) => a.ayah == 1);
-  } else {
-    _needsSurahHeader = false;
-    _needsBismillah = false;
-  }
-  
-  _previousSurahId = firstSurahId;
-}
+        int ayatIndex = _ayatList.indexWhere(
+          (a) => a.surah_id == ayat.surah_id && a.ayah == ayat.ayah,
+        );
+        bool isCurrentAyat = ayatIndex >= 0 && ayatIndex == _currentAyatIndex;
 
-Widget _buildSurahHeaderLine() {
-  final surahName = _getSurahName(widget.suratId);
-  
-  return Container(
-    height: 40, // FIXED: Fixed height untuk consistency
-    margin: const EdgeInsets.symmetric(vertical: 4),
-    child: Stack(
-      alignment: Alignment.center,
-      children: [
-        // Background ornament
-        Container(
-          width: double.infinity,
-          height: 35,
-          decoration: BoxDecoration(
-            image: DecorationImage(
-              image: AssetImage("assets/images/headerquran/headerquran.png"),
-              fit: BoxFit.contain,
+        textSpans.addAll(
+          _buildContinuousAyatSpansWithAPI(ayat, ayatIndex, isCurrentAyat),
+        );
+
+        textSpans.add(
+          TextSpan(
+            text: ' ${_getArabicNumber(ayat.ayah)} ',
+            style: TextStyle(
+              fontSize: 25,
+              fontFamily: 'Me_Quran',
+              color: const Color.fromARGB(150, 0, 0, 0),
+              fontWeight: FontWeight.bold,
             ),
           ),
-        ),
-        // Surah name
-        Text(
-          'سُورَة $surahName',
-          style: TextStyle(
-            fontSize: 18,
-            fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
-            fontWeight: FontWeight.w600,
-            color: Colors.black87,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ],
-    ),
-  );
-}
+        );
 
-Widget _buildBismillahLine() {
-  return Container(
-    height: 35, // FIXED: Fixed height
-    margin: const EdgeInsets.symmetric(vertical: 2),
-    alignment: Alignment.center,
-    child: Text(
-      'k', // Bismillah symbol from the font
-      style: TextStyle(
-        fontSize: 24,
-        fontFamily: '110BesmellahNormal',
-        color: Colors.black87,
-      ),
-      textAlign: TextAlign.center,
-    ),
-  );
-}
+        if (i < ayats.length - 1 || ayatsBySurah.keys.last != surahId) {
+          textSpans.add(TextSpan(text: ' '));
+        }
+      }
 
-Widget _buildEmptyLine() {
-  return Container(
-    height: 28, // FIXED: Consistent line height
-    margin: const EdgeInsets.symmetric(vertical: 1),
-  );
-}
-
-Widget _buildMushafLineWidget(int lineNumber, List<AyatData> ayatsInLine) {
-  return Container(
-    // FIXED: Controlled container dengan constraints
-    width: double.infinity,
-    constraints: BoxConstraints(
-      minHeight: 28,
-      maxHeight: 40,
-    ),
-    margin: const EdgeInsets.symmetric(vertical: 1),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final availableWidth = constraints.maxWidth;
-        return _buildJustifiedLineContent(ayatsInLine, availableWidth, lineNumber);
-      },
-    ),
-  );
-}
-
-Widget _buildJustifiedLineContent(List<AyatData> ayatsInLine, double availableWidth, int lineNumber) {
-  List<TextSpan> textSpans = [];
-  
-  for (final ayat in ayatsInLine) {
-    final isCurrentAyat = ayat.ayah == _currentAyatNumber && ayat.surah_id == widget.suratId;
-    
-    // Determine which portion of ayat belongs to this line
-    final ayatSpans = _buildAyatSpansForLine(ayat, lineNumber, isCurrentAyat);
-    textSpans.addAll(ayatSpans);
-    
-    // Add ayat number if this is the end line of the ayat
-    if (lineNumber == ayat.lineEnd) {
-      textSpans.add(
-        TextSpan(
-          text: ' ${_getArabicNumber(ayat.ayah)} ',
-          style: TextStyle(
-            fontSize: 16,
-            fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
-            color: primaryColor,
-            fontWeight: FontWeight.bold,
+      pageElements.add(
+        RichText(
+          textAlign: TextAlign.justify,
+          textDirection: TextDirection.rtl,
+          text: TextSpan(
+            style: const TextStyle(
+              fontSize: 25,
+              fontFamily: 'Me_Quran',
+            ),
+            children: textSpans,
           ),
         ),
       );
-    }
-  }
+    });
 
-  return Container(
-    width: availableWidth,
-    child: RichText(
-      textAlign: TextAlign.justify,
-      textDirection: TextDirection.rtl,
-      overflow: TextOverflow.visible, // FIXED: Allow proper overflow handling
-      softWrap: false, // FIXED: Prevent auto-wrapping
-      maxLines: 1,
-      text: TextSpan(
-        style: _mushafTextStyle,
-        children: textSpans,
-      ),
-    ),
-  );
-}
-
-List<TextSpan> _buildAyatSpansForLine(AyatData ayat, int lineNumber, bool isCurrentAyat) {
-  List<TextSpan> spans = [];
-  
-  // Get words array (prefer with tashkeel)
-  final words = ayat.wordsArray.isNotEmpty ? ayat.wordsArray : 
-                ayat.wordsArrayNt.isNotEmpty ? ayat.wordsArrayNt : 
-                ayat.arabic.split(RegExp(r'\s+')).where((w) => w.trim().isNotEmpty).toList();
-  
-  if (words.isEmpty) return spans;
-  
-  // Calculate which words belong to this line
-  final totalLines = (ayat.lineEnd - ayat.lineStart + 1).clamp(1, 10);
-  final wordsPerLine = (words.length / totalLines).ceil();
-  final lineIndex = lineNumber - ayat.lineStart;
-  
-  final startWordIndex = lineIndex * wordsPerLine;
-  final endWordIndex = ((lineIndex + 1) * wordsPerLine).clamp(0, words.length);
-  
-  if (startWordIndex >= words.length) return spans;
-  
-  final lineWords = words.sublist(startWordIndex, endWordIndex);
-  
-  // Build spans for words in this line
-  for (int i = 0; i < lineWords.length; i++) {
-    final word = lineWords[i];
-    final wordIndex = startWordIndex + i;
-    
-    // Get API status if available
-    APIWordResult? wordResult;
-    if (isCurrentAyat && wordIndex < _currentAyatResults.length) {
-      wordResult = _currentAyatResults[wordIndex];
-    }
-    
-    final status = wordResult?.getReadingStatus() ?? ReadingStatus.notRead;
-    
-    spans.add(
-      TextSpan(
-        text: '$word ',
-        style: TextStyle(
-          fontSize: _mushafTextStyle.fontSize,
-          fontFamily: _mushafTextStyle.fontFamily,
-          height: _mushafTextStyle.height,
-          letterSpacing: _mushafTextStyle.letterSpacing,
-          color: _getWordColorForMushaf(status, isCurrentAyat),
-          backgroundColor: _shouldHighlightWord(status, isCurrentAyat) 
-              ? _getAPIStatusColor(status, isCurrentAyat).withOpacity(0.2)
-              : null,
-          fontWeight: isCurrentAyat ? FontWeight.w600 : FontWeight.w500,
-        ),
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: pageElements,
     );
   }
-  
-  return spans;
-}
-
-Color _getWordColorForMushaf(ReadingStatus status, bool isCurrentAyat) {
-  if (_hideUnreadAyat && status == ReadingStatus.notRead && !isCurrentAyat) {
-    return Colors.transparent;
-  }
-  
-  if (isCurrentAyat) return listeningColor;
-  
-  switch (status) {
-    case ReadingStatus.correct:
-      return correctColor;
-    case ReadingStatus.error:
-      return errorColor;
-    case ReadingStatus.skipped:
-      return skippedColor;
-    default:
-      return Colors.black87;
-  }
-}
-
-bool _shouldHighlightWord(ReadingStatus status, bool isCurrentAyat) {
-  return isCurrentAyat || status != ReadingStatus.notRead;
-}
-
-String _getSurahName(int surahId) {
-  // Add surah names mapping - simplified version
-  final surahNames = {
-    1: 'الفَاتِحَة',
-    2: 'البَقَرَة', 
-    36: 'يٰسۤ',
-    // Add more as needed
-  };
-  return surahNames[surahId] ?? 'السورة';
-}
 
   List<InlineSpan> _buildContinuousAyatSpansWithAPI(
     AyatData ayat,
     int ayatIndex,
     bool isCurrentAyat,
   ) {
-    final arabicWords = ayat.arabic
-        .split(' ')
-        .where((w) => w.trim().isNotEmpty)
-        .toList();
     List<InlineSpan> spans = [];
 
-    for (int wordIndex = 0; wordIndex < arabicWords.length; wordIndex++) {
-      final word = arabicWords[wordIndex];
+    // Use words from SQLite data
+    for (int wordIndex = 0; wordIndex < ayat.words.length; wordIndex++) {
+      final word = ayat.words[wordIndex];
 
       // Get status from API results
       APIWordResult? wordResult;
@@ -3332,11 +2819,10 @@ String _getSurahName(int surahId) {
 
       spans.add(
         TextSpan(
-          text: '$word ',
+          text: '${word.text} ',
           style: TextStyle(
             fontSize: 24,
-            fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
-
+            fontFamily: 'Me_Quran',
             color: _getAPIWordTextColor(
               status,
               isCurrentWord,
@@ -3377,7 +2863,7 @@ String _getSurahName(int surahId) {
   }
 
   FontWeight _getWordFontWeight(double confidence, bool isCurrentWord) {
-    if (isCurrentWord) return FontWeight.w600;
+    if (isCurrentWord) return FontWeight.w500;
     return FontWeight.w500;
   }
 
@@ -3388,21 +2874,29 @@ String _getSurahName(int surahId) {
   }
 
   Widget _buildSurahHeaderInPage(int surahId) {
+    if (_suratNameArabic.isEmpty) return const SizedBox.shrink();
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 0),
       child: Stack(
         alignment: Alignment.center,
         children: [
-          Image.asset(
-            "assets/images/headerquran/headerquran.png",
-            fit: BoxFit.contain,
-            width: double.infinity,
-          ),
           Text(
-            'سُورَة ${widget.suratName}',
+            'header',
+            style: TextStyle(
+              fontSize:
+                  MediaQuery.of(context).size.width *
+                  0.12, // 12% dari lebar layar
+              fontFamily: 'Quran-Common',
+            ),
+            textAlign: TextAlign.center,
+          ),
+
+          Text(
+            'surah036',
             style: const TextStyle(
-              fontSize: 22,
-              fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+              fontSize: 40,
+              fontFamily: 'surah-name-v2',
               fontWeight: FontWeight.w500,
               color: Colors.black,
             ),
@@ -3415,12 +2909,12 @@ String _getSurahName(int surahId) {
 
   Widget _buildBismillahInPage() {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.symmetric(vertical: 0),
       child: Text(
-        'k',
+        '﷽',
         style: TextStyle(
-          fontSize: 27,
-          fontFamily: '110BesmellahNormal',
+          fontSize: 40,
+          fontFamily: 'Quran-Common',
           color: Colors.black87,
         ),
         textAlign: TextAlign.center,
@@ -3446,17 +2940,18 @@ String _getSurahName(int surahId) {
 
   Widget _buildEnhancedAllAyatDisplay() {
     List<Widget> ayatWidgets = [];
-
+    // TAMBAH HEADER SURAT MENGGUNAKAN METHOD BARU
+    ayatWidgets.add(_buildVerticalModeHeader());
     ayatWidgets.add(
       Padding(
         padding: const EdgeInsets.fromLTRB(0, 3, 0, 0),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 0, vertical: 0),
           child: const Text(
-            'k',
+            '﷽',
             style: TextStyle(
               fontSize: 43,
-              fontFamily: '110BesmellahNormal',
+              fontFamily: 'Quran-Common',
               fontWeight: FontWeight.normal,
               height: 0.8,
               color: Colors.black,
@@ -3538,19 +3033,14 @@ String _getSurahName(int surahId) {
     int ayatIndex,
     bool isCurrentAyat,
   ) {
-    final arabicWords = ayat.arabic
-        .split(' ')
-        .where((w) => w.trim().isNotEmpty)
-        .toList();
-
     return Wrap(
       alignment: WrapAlignment.start,
       textDirection: TextDirection.rtl,
       spacing: 0,
       runSpacing: 8,
-      children: arabicWords.asMap().entries.map((entry) {
+      children: ayat.words.asMap().entries.map((entry) {
         final wordIndex = entry.key;
-        final word = entry.value;
+        final wordData = entry.value;
 
         // Get status from API results
         APIWordResult? wordResult;
@@ -3559,7 +3049,7 @@ String _getSurahName(int surahId) {
         }
 
         return _buildEnhancedWordWidget(
-          word,
+          wordData.text, // Use text from SQLite WordData
           wordResult,
           isCurrentAyat,
           wordIndex,
@@ -3602,7 +3092,7 @@ String _getSurahName(int surahId) {
             word,
             style: TextStyle(
               fontSize: 26,
-              fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+              fontFamily: 'Me_Quran',
               color: _getAPIWordTextColor(status, isCurrentWord),
               fontWeight: _getWordFontWeight(
                 wordResult?.similarity_score ?? 0.0,
@@ -3652,7 +3142,7 @@ String _getSurahName(int surahId) {
                     wordResult.expected,
                     style: const TextStyle(
                       fontSize: 24,
-                      fontFamily: 'KFGQPCUthmanicScriptHAFSRegular',
+                      fontFamily: 'Me_Quran',
                       fontWeight: FontWeight.bold,
                     ),
                     textAlign: TextAlign.center,
@@ -3987,7 +3477,7 @@ String _getSurahName(int surahId) {
 
   void _exportSession() {
     final sessionData = {
-      'surah': widget.suratName,
+      'surah': _suratNameSimple,
       'session_id': _activeSessionId,
       'api_calls': _totalTranscriptsSent,
       'successful_responses': _successfulAPIResponses,
@@ -4218,51 +3708,113 @@ String _getSurahName(int surahId) {
 class AyatData {
   final int surah_id;
   final int ayah;
-  final String arabic;
-  final List<String> wordsArray; // with tashkeel
-  final List<String> wordsArrayNt; // no tashkeel fallback
-  final int lineStart;
-  final int lineEnd;
+  final List<WordData> words;
   final int page;
   final int juz;
-  // ... other fields you already have
+  final String fullArabicText;
 
   AyatData({
     required this.surah_id,
     required this.ayah,
-    required this.arabic,
-    required this.wordsArray,
-    required this.wordsArrayNt,
-    required this.lineStart,
-    required this.lineEnd,
+    required this.words,
     required this.page,
     required this.juz,
+    required this.fullArabicText,
   });
 
-  factory AyatData.fromJson(Map<String, dynamic> json) {
-    List<String> parseListField(dynamic v) {
-      if (v == null) return [];
-      if (v is List) return v.map((e) => e.toString()).toList();
-      // sometimes returned as PostgreSQL array string or JSON string
-      final s = v.toString();
-      try {
-        final dynamic parsed = jsonDecode(s);
-        if (parsed is List) return parsed.map((e) => e.toString()).toList();
-      } catch (_) {}
-      // fallback: simple split by space (not perfect but safe)
-      return s.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-    }
+  // Computed properties for backward compatibility
+  String get arabic => words.map((w) => w.text).join(' ');
+  String get noTashkeel =>
+      words.map((w) => w.text).join(' '); // TODO: Remove tashkeel
+  String get transliteration => ''; // Not available in new DB
+  List<String> get wordsArrayNt => words.map((w) => w.text).toList();
+  double get quarterHizb => 0.0; // Not available in new DB
 
+  factory AyatData.fromWordsAndPage({
+    required int surahId,
+    required int ayahNumber,
+    required List<WordData> words,
+    required int page,
+    required int juz,
+  }) {
     return AyatData(
-      surah_id: json['surah_id'] is int ? json['surah_id'] : int.parse(json['surah_id'].toString()),
-      ayah: json['ayah'] is int ? json['ayah'] : int.parse(json['ayah'].toString()),
-      arabic: (json['arabic'] ?? '').toString(),
-      wordsArray: parseListField(json['words_array']),
-      wordsArrayNt: parseListField(json['words_array_nt']),
-      lineStart: json['line_start'] is int ? json['line_start'] : int.tryParse(json['line_start']?.toString() ?? '') ?? 0,
-      lineEnd: json['line_end'] is int ? json['line_end'] : int.tryParse(json['line_end']?.toString() ?? '') ?? 0,
-      page: json['page'] is int ? json['page'] : int.tryParse(json['page']?.toString() ?? '') ?? 0,
-      juz: json['juz'] is int ? json['juz'] : int.tryParse(json['juz']?.toString() ?? '') ?? 0,
+      surah_id: surahId,
+      ayah: ayahNumber,
+      words: words,
+      page: page,
+      juz: juz,
+      fullArabicText: words.map((w) => w.text).join(' '),
+    );
+  }
+}
+
+class WordData {
+  final int id;
+  final String location;
+  final int surah;
+  final int ayah;
+  final int wordNumber;
+  final String text;
+
+  WordData({
+    required this.id,
+    required this.location,
+    required this.surah,
+    required this.ayah,
+    required this.wordNumber,
+    required this.text,
+  });
+
+  factory WordData.fromSqlite(Map<String, dynamic> row) {
+    return WordData(
+      id: row['id'] as int,
+      location: row['location'] as String,
+      surah: row['surah'] as int,
+      ayah: row['ayah'] as int,
+      wordNumber: row['word'] as int,
+      text: row['text'] as String,
+    );
+  }
+}
+
+class ChapterData {
+  final int id;
+  final String name;
+  final String nameSimple;
+  final String nameArabic;
+  final int revelationOrder;
+  final String revelationPlace;
+  final int versesCount;
+  final int bismillahPre;
+
+  ChapterData({
+    required this.id,
+    required this.name,
+    required this.nameSimple,
+    required this.nameArabic,
+    required this.revelationOrder,
+    required this.revelationPlace,
+    required this.versesCount,
+    required this.bismillahPre,
+  });
+
+  // Backward compatibility properties
+  String get namalatin => nameSimple;
+  String get arti => ''; // Not available in new DB
+  String get tempatturun => revelationPlace;
+  String get deskripsi => ''; // Not available in new DB
+  int get jumlahayat => versesCount;
+
+  factory ChapterData.fromSqlite(Map<String, dynamic> row) {
+    return ChapterData(
+      id: row['id'] as int,
+      name: row['name'] as String,
+      nameSimple: row['name_simple'] as String,
+      nameArabic: row['name_arabic'] as String,
+      revelationOrder: row['revelation_order'] as int,
+      revelationPlace: row['revelation_place'] as String,
+      versesCount: row['verses_count'] as int,
+      bismillahPre: row['bismillah_pre'] as int,
     );
   }
 }
@@ -4673,4 +4225,443 @@ class EnhancedModelInfo {
     required this.accuracy,
     required this.speed,
   });
+}
+
+// ==================== FIXED QURAN SQLITE SERVICE ====================
+class QuranSQLiteService {
+  static final QuranSQLiteService _instance = QuranSQLiteService._internal();
+  factory QuranSQLiteService() => _instance;
+  QuranSQLiteService._internal();
+
+  Database? _metadataDB;
+  Database? _uthmaniDB;
+  Database? _uthmaniLinesDB;
+
+  // Initialize all databases
+  Future<void> initialize() async {
+    _metadataDB = await DBHelper.openDB(DBType.metadata);
+    _uthmaniDB = await DBHelper.openDB(DBType.uthmani);
+    _uthmaniLinesDB = await DBHelper.openDB(DBType.uthmani15);
+  }
+
+  // Get chapter/surah information
+  Future<ChapterData> getChapterInfo(int surahId) async {
+    if (_metadataDB == null) await initialize();
+
+    final result = await _metadataDB!.query(
+      'chapters',
+      where: 'id = ?',
+      whereArgs: [surahId],
+      limit: 1,
+    );
+
+    if (result.isEmpty) {
+      throw Exception('Chapter not found: $surahId');
+    }
+
+    return ChapterData.fromSqlite(result.first);
+  }
+
+  // FIXED: Get all words for a specific surah
+  Future<List<WordData>> getSurahWords(int surahId) async {
+    if (_uthmaniDB == null) await initialize();
+
+    final result = await _uthmaniDB!.query(
+      'words',
+      where: 'surah = ?',
+      whereArgs: [surahId],
+      orderBy: 'ayah ASC, word ASC',
+    );
+
+    return result.map((row) => WordData.fromSqlite(row)).toList();
+  }
+
+  // FIXED: Get words for specific ayah
+  Future<List<WordData>> getAyahWords(int surahId, int ayahNumber) async {
+    if (_uthmaniDB == null) await initialize();
+
+    final result = await _uthmaniDB!.query(
+      'words',
+      where: 'surah = ? AND ayah = ?',
+      whereArgs: [surahId, ayahNumber],
+      orderBy: 'word ASC',
+    );
+
+    return result.map((row) => WordData.fromSqlite(row)).toList();
+  }
+
+  // FIXED: Get ayat data for entire surah
+  Future<List<AyatData>> getSurahAyatData(int surahId) async {
+    final words = await getSurahWords(surahId);
+    final chapter = await getChapterInfo(surahId);
+
+    // Group words by ayah
+    Map<int, List<WordData>> ayahGroups = {};
+    for (final word in words) {
+      if (!ayahGroups.containsKey(word.ayah)) {
+        ayahGroups[word.ayah] = [];
+      }
+      ayahGroups[word.ayah]!.add(word);
+    }
+
+    List<AyatData> ayatList = [];
+
+    for (int ayahNum = 1; ayahNum <= chapter.versesCount; ayahNum++) {
+      final ayahWords = ayahGroups[ayahNum] ?? [];
+
+      // Calculate page and juz using proper logic
+      final page = await _getPageForAyah(surahId, ayahNum);
+      final juz = _calculateJuz(surahId, ayahNum);
+
+      ayatList.add(
+        AyatData.fromWordsAndPage(
+          surahId: surahId,
+          ayahNumber: ayahNum,
+          words: ayahWords,
+          page: page,
+          juz: juz,
+        ),
+      );
+    }
+
+    return ayatList;
+  }
+
+  // FIXED: Get page layout information
+  Future<List<PageLayoutData>> getPageLayout(int pageNumber) async {
+    if (_uthmaniLinesDB == null) await initialize();
+
+    final result = await _uthmaniLinesDB!.query(
+      'pages',
+      where: 'page_number = ?',
+      whereArgs: [pageNumber],
+      orderBy: 'line_number ASC',
+    );
+
+    return result.map((row) => PageLayoutData.fromSqlite(row)).toList();
+  }
+
+  // FIXED: Get words by ID range - ini adalah method kunci yang diperbaiki
+  Future<List<WordData>> _getWordsByIdRange(int startId, int endId) async {
+    if (_uthmaniDB == null) await initialize();
+
+    final result = await _uthmaniDB!.query(
+      'words',
+      where: 'id >= ? AND id <= ?',
+      whereArgs: [startId, endId],
+      orderBy: 'id ASC',
+    );
+
+    return result.map((row) => WordData.fromSqlite(row)).toList();
+  }
+
+  // COMPLETELY REWRITTEN: Get ayat data for current page (Mushaf mode)
+  Future<List<AyatData>> getCurrentPageAyats(int pageNumber) async {
+    print('MUSHAF_DEBUG: Loading page $pageNumber');
+
+    // Step 1: Get page layout
+    final pageLayout = await getPageLayout(pageNumber);
+    print(
+      'MUSHAF_DEBUG: Found ${pageLayout.length} layout lines for page $pageNumber',
+    );
+
+    if (pageLayout.isEmpty) {
+      print('MUSHAF_DEBUG: No layout data found for page $pageNumber');
+      return [];
+    }
+
+    // Step 2: Process each layout line and collect all ayat data
+    Map<String, AyatData> ayatMap = {};
+
+    for (final layout in pageLayout) {
+      print(
+        'MUSHAF_DEBUG: Processing line ${layout.lineNumber}, type: ${layout.lineType}',
+      );
+
+      if (layout.lineType == 'ayah' &&
+          layout.firstWordId != null &&
+          layout.lastWordId != null) {
+        print(
+          'MUSHAF_DEBUG: Getting words from ID ${layout.firstWordId} to ${layout.lastWordId}',
+        );
+
+        // Get words for this line
+        final wordsInLine = await _getWordsByIdRange(
+          layout.firstWordId!,
+          layout.lastWordId!,
+        );
+
+        print('MUSHAF_DEBUG: Found ${wordsInLine.length} words in range');
+
+        if (wordsInLine.isNotEmpty) {
+          // Group words by ayah (since one line might contain multiple ayahs or part of ayah)
+          final groupedByAyah = <String, List<WordData>>{};
+
+          for (final word in wordsInLine) {
+            final key = '${word.surah}:${word.ayah}';
+            if (!groupedByAyah.containsKey(key)) {
+              groupedByAyah[key] = [];
+            }
+            groupedByAyah[key]!.add(word);
+          }
+
+          // Create AyatData for each ayah group
+          for (final entry in groupedByAyah.entries) {
+            final key = entry.key;
+            final wordsInAyah = entry.value;
+            final parts = key.split(':');
+            final surahId = int.parse(parts[0]);
+            final ayahNum = int.parse(parts[1]);
+
+            if (ayatMap.containsKey(key)) {
+              // Merge words if ayah already exists (ayah spans multiple lines)
+              final existingWords = ayatMap[key]!.words;
+              final allWords = [...existingWords, ...wordsInAyah];
+              // Sort by word position to maintain order
+              allWords.sort((a, b) => a.wordNumber.compareTo(b.wordNumber));
+
+              ayatMap[key] = AyatData.fromWordsAndPage(
+                surahId: surahId,
+                ayahNumber: ayahNum,
+                words: allWords,
+                page: pageNumber,
+                juz: _calculateJuz(surahId, ayahNum),
+              );
+            } else {
+              // Create new ayah entry
+              ayatMap[key] = AyatData.fromWordsAndPage(
+                surahId: surahId,
+                ayahNumber: ayahNum,
+                words: wordsInAyah,
+                page: pageNumber,
+                juz: _calculateJuz(surahId, ayahNum),
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // Step 3: Convert map to list and sort properly
+    final ayatList = ayatMap.values.toList();
+
+    // Sort by surah then ayah
+    ayatList.sort((a, b) {
+      if (a.surah_id != b.surah_id) {
+        return a.surah_id.compareTo(b.surah_id);
+      }
+      return a.ayah.compareTo(b.ayah);
+    });
+
+    print(
+      'MUSHAF_DEBUG: Final result: ${ayatList.length} ayats for page $pageNumber',
+    );
+    for (final ayat in ayatList) {
+      print(
+        'MUSHAF_DEBUG: - Surah ${ayat.surah_id}, Ayah ${ayat.ayah}, ${ayat.words.length} words',
+      );
+    }
+
+    return ayatList;
+  }
+
+  // NEW METHOD: Get mushaf page data with layout info (untuk rendering mushaf yang proper)
+  Future<MushafPageData> getMushafPageData(int pageNumber) async {
+    print('MUSHAF_DEBUG: Getting mushaf page data for page $pageNumber');
+
+    final pageLayout = await getPageLayout(pageNumber);
+    final List<MushafLine> lines = [];
+
+    for (final layout in pageLayout) {
+      MushafLine line;
+
+      switch (layout.lineType) {
+        case 'surah_name':
+          if (layout.surahNumber != null) {
+            final chapter = await getChapterInfo(layout.surahNumber!);
+            line = MushafLine(
+              lineNumber: layout.lineNumber,
+              lineType: MushafLineType.surahName,
+              isCentered: layout.isCentered,
+              content: chapter.nameArabic,
+              surahNumber: layout.surahNumber,
+            );
+          } else {
+            continue;
+          }
+          break;
+
+        case 'basmallah':
+          line = MushafLine(
+            lineNumber: layout.lineNumber,
+            lineType: MushafLineType.basmallah,
+            isCentered: layout.isCentered,
+            content: '﷽',
+          );
+          break;
+
+        case 'ayah':
+          if (layout.firstWordId != null && layout.lastWordId != null) {
+            final words = await _getWordsByIdRange(
+              layout.firstWordId!,
+              layout.lastWordId!,
+            );
+
+            line = MushafLine(
+              lineNumber: layout.lineNumber,
+              lineType: MushafLineType.ayah,
+              isCentered: layout.isCentered,
+              content: words.map((w) => w.text).join(' '),
+              words: words,
+              firstWordId: layout.firstWordId,
+              lastWordId: layout.lastWordId,
+            );
+          } else {
+            continue;
+          }
+          break;
+
+        default:
+          continue;
+      }
+
+      lines.add(line);
+    }
+
+    return MushafPageData(pageNumber: pageNumber, lines: lines);
+  }
+
+  // FIXED: Helper method to get page for ayah
+  Future<int> _getPageForAyah(int surahId, int ayahNumber) async {
+    if (_uthmaniLinesDB == null) await initialize();
+
+    // Get the first word of this ayah
+    final ayahWords = await getAyahWords(surahId, ayahNumber);
+    if (ayahWords.isEmpty) return 1;
+
+    final firstWordId = ayahWords.first.id;
+
+    // Find which page contains this word ID
+    final result = await _uthmaniLinesDB!.rawQuery(
+      '''
+      SELECT page_number FROM pages 
+      WHERE line_type = 'ayah' 
+      AND first_word_id <= ? 
+      AND last_word_id >= ?
+      LIMIT 1
+    ''',
+      [firstWordId, firstWordId],
+    );
+
+    if (result.isNotEmpty) {
+      return result.first['page_number'] as int;
+    }
+
+    return 1; // Default fallback
+  }
+
+  // FIXED: Helper method to calculate Juz
+  int _calculateJuz(int surahId, int ayahNumber) {
+    // Basic Juz calculation - you can expand this with more accurate data
+    if (surahId == 1) return 1; // Al-Fatiha
+    if (surahId == 2) {
+      if (ayahNumber <= 141) return 1;
+      if (ayahNumber <= 252) return 2;
+      return 3;
+    }
+    if (surahId <= 4) return 2;
+    if (surahId <= 6) return 3;
+    if (surahId <= 7) return 4;
+    if (surahId <= 9) return 5;
+    if (surahId <= 11) return 6;
+    if (surahId <= 12) return 7;
+    if (surahId <= 14) return 8;
+    if (surahId <= 16) return 9;
+    if (surahId <= 18) return 10;
+    // Add more accurate boundaries as needed
+    return 1; // Default
+  }
+
+  void dispose() {
+    _metadataDB?.close();
+    _uthmaniDB?.close();
+    _uthmaniLinesDB?.close();
+  }
+}
+
+// NEW: Data classes untuk mushaf rendering
+class MushafPageData {
+  final int pageNumber;
+  final List<MushafLine> lines;
+
+  MushafPageData({required this.pageNumber, required this.lines});
+}
+
+class MushafLine {
+  final int lineNumber;
+  final MushafLineType lineType;
+  final bool isCentered;
+  final String content;
+  final List<WordData>? words;
+  final int? firstWordId;
+  final int? lastWordId;
+  final int? surahNumber;
+
+  MushafLine({
+    required this.lineNumber,
+    required this.lineType,
+    required this.isCentered,
+    required this.content,
+    this.words,
+    this.firstWordId,
+    this.lastWordId,
+    this.surahNumber,
+  });
+}
+
+enum MushafLineType { surahName, basmallah, ayah }
+
+// FIXED: PageLayoutData factory method
+class PageLayoutData {
+  final int pageNumber;
+  final int lineNumber;
+  final String lineType;
+  final bool isCentered;
+  final int? firstWordId;
+  final int? lastWordId;
+  final int? surahNumber;
+
+  PageLayoutData({
+    required this.pageNumber,
+    required this.lineNumber,
+    required this.lineType,
+    required this.isCentered,
+    this.firstWordId,
+    this.lastWordId,
+    this.surahNumber,
+  });
+
+  factory PageLayoutData.fromSqlite(Map<String, dynamic> row) {
+    return PageLayoutData(
+      pageNumber: row['page_number'] as int,
+      lineNumber: row['line_number'] as int,
+      lineType: row['line_type'] as String,
+      isCentered: (row['is_centered'] as int) == 1,
+      // FIXED: Handle empty string and null values properly
+      firstWordId: _parseIntSafely(row['first_word_id']),
+      lastWordId: _parseIntSafely(row['last_word_id']),
+      surahNumber: _parseIntSafely(row['surah_number']),
+    );
+  }
+
+  // FIXED: Safe integer parsing for database values
+  static int? _parseIntSafely(dynamic value) {
+    if (value == null) return null;
+    if (value is int) return value;
+    if (value is String) {
+      if (value.trim().isEmpty) return null;
+      return int.tryParse(value);
+    }
+    return null;
+  }
 }

@@ -1,0 +1,99 @@
+MAIN PROMPT : 
+Mobile Flutter, nanti kamu kembalikan kode yang neccesary saja, jangan kode full 100%, dengan instruksi guide super spesifik & ekstra jelas tentang apa yang harus kulakukan(replace/tambah/hapus/edit/install/dll) seperti blueprint lengkap ekstra detail, kerjakan yang hanya perintah, jangan kerjakan yang bukan perintah, dan pengerjaan harus dilakukan semaksimal mungkin, sedetail mungkin, dikerjakan dengan teliti & seksama, dan sesempurna mungkin, so think twice, think deep, and make sure that it was perfect, and there are no single error in it, not at all.
+
+Tolong kamu fix bug pada mode baca mushaf, mode baca quran, soalnya disinikan aku baru aja transisi dari yang sebelumnya database menggunakan supabase, sekarang aku transisi ke sqlite, dan yang pastinya, tabel-tabel & kolom-kolom juga akan beda, dan pastinya juga akan mengubah algoritma & teknik, nah untuk saat ini kan mode baca quran itu sama sekali tidak bekerja(No Ayats found in this page), tugasmu adalah fix itu, agar mode mushaf bekerja & merevisi algoritma & teknik, agar layout mushaf itu sesuai dengan yang aslinya, yaitu AlQuran mushaf uthmani, disini kita menggunakan 2 database, yaitu database "uthmani" untuk words, dan database "uthmani-15-lines" untuk layouting per halamannya agar layouting persis 100% sesuai dengan alquran mushaf uthmani yang aslinya, untuk contoh algoritma dari resource nya begini(ini contoh untuk web based, sedangkan aplikasi kita adalah mobile flutter) :  const SurahNames = {     1: "الفاتحة"   }    const pageData = [     { line_number: 1, line_type: 'surah_name', is_centered: true, first_word_id: null, last_word_id: null, surah_number: 1 },     { line_number: 2, line_type: 'ayah',  is_centered: true, first_word_id: 1, last_word_id: 5, surah_number: null },     { line_number: 3, line_type: 'ayah',  is_centered: true, first_word_id: 6, last_word_id: 10, surah_number: null },     { line_number: 4, line_type: 'ayah',  is_centered: true, first_word_id: 11, last_word_id: 17, surah_number: null },     { line_number: 5, line_type: 'ayah',  is_centered: true, first_word_id: 18, last_word_id: 23, surah_number: null },     { line_number: 6, line_type: 'ayah',  is_centered: true, first_word_id: 24, last_word_id: 29, surah_number: null },     { line_number: 7, line_type: 'ayah',  is_centered: true, first_word_id: 30, last_word_id: 33, surah_number: null },     { line_number: 8, line_type: 'ayah',  is_centered: true, first_word_id: 34, last_word_id: 36, surah_number: null }   ];    const wordData = {     "1": "بِسۡمِ",     "6": "ٱلۡحَمۡدُ",     "11": "ٱلرَّحۡمَٰنِ",     "14": "مَٰلِكِ",     "18": "إِيَّاكَ",     "23": "ٱهۡدِنَا",     "27": "صِرَٰطَ",     "2": "ٱللَّهِ",     "7": "لِلَّهِ",     "12": "ٱلرَّحِيمِ",     "15": "يَوۡمِ",     "19": "نَعۡبُدُ",     "24": "ٱلصِّرَٰطَ",     "28": "ٱلَّذِينَ",     "3": "ٱلرَّحۡمَٰنِ",     "8": "رَبِّ",     "13": "٣",     "16": "ٱلدِّينِ",     "20": "وَإِيَّاكَ",     "25": "ٱلۡمُسۡتَقِيمَ",     "29": "أَنۡعَمۡتَ",     "4": "ٱلرَّحِيمِ",     "9": "ٱلۡعَٰلَمِينَ",     "17": "٤",     "21": "نَسۡتَعِينُ",     "26": "٦",     "30": "عَلَيۡهِمۡ",     "5": "١",     "10": "٢",     "22": "٥",     "31": "غَيۡرِ",     "32": "ٱلۡمَغۡضُوبِ",     "33": "عَلَيۡهِمۡ",     "34": "وَلَا",     "35": "ٱلضَّآلِّينَ",     "36": "٧"   } function getWords(firstWordId, lastWordId) {     return Object.entries(wordData)         .map(([key, value]) => ({ id: Number(key), text: value })) // Convert keys to numbers         .sort((a, b) => a.id - b.id) // Sort by word ID         .filter(word => word.id >= firstWordId && word.id <= lastWordId) // Filter by range         .map(word => word.text) // Extract text values         .join(' '); }  function getSurahName(number) {     return `سورۃ ${SurahNames[number]}`;}
+
+function renderPage() {
+    const pageElement = document.getElementById('run-preview');
+    pageElement.innerHTML = ''; 
+   pageElement.classList.add('qpc-hafs'); // Use QPC Hafs font
+
+    pageData.forEach(line => {
+        let lineElement = document.createElement('div');
+        lineElement.classList.add('line');
+
+        if (line.is_centered) {
+            lineElement.style.textAlign = 'center';
+            lineElement.style.display = 'flex';
+            lineElement.style.justifyContent = 'center';
+        }
+
+        switch (line.line_type) {
+            case 'surah_name':
+                lineElement.innerHTML = getSurahName(line.surah_number);
+                lineElement.classList.add('surah-name');
+                break;
+            case 'ayah':
+                lineElement.innerHTML = `${getWords(line.first_word_id, line.last_word_id)}`;
+                lineElement.classList.add('ayah');
+                break;
+            case 'basmallah':
+                lineElement.innerHTML = '﷽';
+                lineElement.classList.add('basmallah');
+                break;
+        }
+
+        pageElement.appendChild(lineElement);
+    });
+}
+
+  renderPage();
+  itu hanya referensi dari web nya aja, yang pastinya algoritma web dengan aplikasi berbeda, jadi kamu tidak harus bergantung dengan itu
+
+DATABASE :  1.uthmani Structure :  CREATE TABLE words ( id INTEGER, location TEXT, surah INTEGER, ayah INTEGER, word INTEGER, text TEXT ); DataExample :  INSERT INTO words (id, location, surah, ayah, word, text) VALUES (1, '1:1:1', 1, 1, 1, '??????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (2, '1:1:2', 1, 1, 2, '???????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (3, '1:1:3', 1, 1, 3, '?????????????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (4, '1:1:4', 1, 1, 4, '??????????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (5, '1:1:5', 1, 1, 5, '?'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (37, '2:1:1', 2, 1, 1, '?????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (38, '2:1:2', 2, 1, 2, '?'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (6440, '3:1:1', 3, 1, 1, '?????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (6441, '3:1:2', 3, 1, 2, '?'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (10121, '4:1:1', 4, 1, 1, '?????????????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (10122, '4:1:2', 4, 1, 2, '????????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (10123, '4:1:3', 4, 1, 3, '?????????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (10124, '4:1:4', 4, 1, 4, '?????????'); INSERT INTO words (id, location, surah, ayah, word, text) VALUES (10125, '4:1:5', 4, 1, 5, '???????');
+
+2.uthmani-15-lines
+Structure : 
+CREATE TABLE pages (
+page_number INTEGER,
+line_number INTEGER,
+line_type TEXT,
+is_centered INTEGER,
+first_word_id INTEGER,
+last_word_id INTEGER,
+surah_number INTEGER
+);
+DataExample : 
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 1, 'surah_name', 1, '', '', 1);
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 2, 'ayah', 1, 1, 5, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 3, 'ayah', 1, 6, 10, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 4, 'ayah', 1, 11, 17, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 5, 'ayah', 1, 18, 23, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 6, 'ayah', 1, 24, 29, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 7, 'ayah', 1, 30, 33, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (1, 8, 'ayah', 1, 34, 36, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 1, 'surah_name', 1, '', '', 2);
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 2, 'basmallah', 1, '', '', '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 3, 'ayah', 1, 37, 44, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 4, 'ayah', 1, 45, 51, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 5, 'ayah', 1, 52, 59, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 6, 'ayah', 1, 60, 68, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 7, 'ayah', 1, 69, 74, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (2, 8, 'ayah', 1, 75, 77, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (3, 1, 'ayah', 0, 78, 86, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (3, 2, 'ayah', 0, 87, 96, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (3, 3, 'ayah', 0, 97, 104, '');
+INSERT INTO pages (page_number, line_number, line_type, is_centered, first_word_id, last_word_id, surah_number) VALUES (3, 4, 'ayah', 0, 105, 114, '');
+
+3.quran-metadata-surah-name
+
+CREATE TABLE chapters (
+
+id INTEGER PRIMARY KEY,
+
+name TEXT,
+
+name_simple TEXT,
+
+name_arabic TEXT,
+
+revelation_order INTEGER,
+
+revelation_place TEXT,
+
+verses_count INTEGER,
+
+bismillah_pre INTEGER
+
+);
+

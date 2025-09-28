@@ -1,0 +1,80 @@
+import 'package:flutter/material.dart';
+
+class MushafTextRenderer {
+  static const double PAGE_HEIGHT = 700.0; // Total page height
+  static const double LINE_HEIGHT = 40; // Fixed height per line
+  static const double PAGE_PADDING = 0.0;
+  static const double WORD_SPACING_MIN = 0.0; // Reduced minimum spacing
+  static const double WORD_SPACING_MAX = 12.0; // Reduced maximum spacing
+
+  // Render justified text for ayah lines
+static Widget renderJustifiedLine({
+  required List<InlineSpan> wordSpans,
+  required bool isCentered,
+  required double availableWidth,
+  required BuildContext context,
+}) {
+  if (wordSpans.isEmpty) return const SizedBox.shrink();
+
+  // For centered lines (surah names, basmallah)
+  if (isCentered) {
+    return SizedBox(
+      height: LINE_HEIGHT,
+      width: availableWidth,
+      child: Center(
+        child: RichText(
+          textAlign: TextAlign.center,
+          textDirection: TextDirection.rtl,
+          overflow: TextOverflow.visible,
+          text: TextSpan(children: wordSpans),
+        ),
+      ),
+    );
+  }
+
+  // For justified ayah lines
+  return SizedBox(
+    height: LINE_HEIGHT,
+    width: availableWidth,
+    child: _buildJustifiedText(
+      wordSpans: wordSpans,
+      maxWidth: availableWidth,
+    ),
+  );
+}
+
+static Widget _buildJustifiedText({
+  required List<InlineSpan> wordSpans,
+  required double maxWidth,
+}) {
+  if (wordSpans.isEmpty) return const SizedBox.shrink();
+
+  // If only one word, just align it
+  if (wordSpans.length == 1) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: RichText(
+        textDirection: TextDirection.rtl,
+        overflow: TextOverflow.ellipsis,
+        text: wordSpans.first as TextSpan,
+      ),
+    );
+  }
+
+  // For multiple words, use simple Wrap without Flexible
+  return Wrap(
+    direction: Axis.horizontal,
+    textDirection: TextDirection.rtl,
+    alignment: WrapAlignment.spaceBetween,
+    runAlignment: WrapAlignment.center,
+    spacing: WORD_SPACING_MIN,
+    children: wordSpans.map((span) {
+      return RichText(
+        textDirection: TextDirection.rtl,
+        overflow: TextOverflow.ellipsis,
+        text: span as TextSpan,
+      );
+    }).toList(),
+  );
+}
+}

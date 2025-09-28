@@ -27,7 +27,8 @@ dependencies:
   mic_stream: ^0.7.2
   connectivity_plus: ^7.0.0
   web_socket_channel: ^3.0.3
-  collection: ^1.19.1
+  sqflite: ^2.4.2
+  path: ^1.9.1
 
 dependency_overrides:
   speech_to_text: 7.1.0
@@ -45,21 +46,28 @@ flutter:
 
   assets:
     - assets/models/vosk-model-ar-mgb2-0.4.zip
-    - assets/images/headerquran/headerquran.png
+    - assets/data/quran-metadata-surah-name.sqlite
+    - assets/data/uthmani-15-lines.db
+    - assets/data/uthmani.db
+    - assets/data/
 
   fonts:
-    - family: Uthmanic
-      fonts:
-        - asset: assets/fonts/Uthmanic.otf
-
     - family: UthmanTN
       fonts:
         - asset: assets/fonts/UthmanTN_v2-0.ttf
-        
-    - family: 110BesmellahNormal
-      fonts:
-        - asset: assets/fonts/110BesmellahNormal.ttf
 
-    - family: KFGQPC
+    - family: Quran-Common
+      fonts:
+        - asset: assets\fonts\quran-common.ttf
+
+    - family: Me_Quran
+      fonts:
+        - asset: assets\fonts\me_quran.ttf
+
+    - family: surah-name-v2
+      fonts:
+        - asset: assets\fonts\surah-name-v2.ttf
+
+    - family: KFGQPCUthmanicScriptHAFSRegular
       fonts:
         - asset: assets\fonts\KFGQPCUthmanicScriptHAFSRegular.otf

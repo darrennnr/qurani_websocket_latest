@@ -1963,6 +1963,34 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
     });
   }
 
+  Future<void> _cleanup() async {
+    _processingTimer?.cancel();
+    _vadTimer?.cancel();
+    _autoSendTimer?.cancel();
+
+    try {
+      if (_speechService != null) {
+        await _speechService!.stop();
+        _speechService = null;
+      }
+      if (_recognizer != null) {
+        await _recognizer!.dispose();
+        _recognizer = null;
+      }
+      if (_model != null) {
+        _model!.dispose();
+        _model = null;
+      }
+      if (_webSocketChannel != null) {
+        await _webSocketChannel!.sink.close(status.goingAway);
+        _webSocketChannel = null;
+      }
+    } catch (e) {
+      _log('CLEANUP: Error during cleanup - $e');
+    }
+
+    _log('=== API-INTEGRATED STT DISPOSAL COMPLETED ===');
+  }
 
   void _log(String message) {
     final timestamp = DateTime.now().toString().substring(11, 23);
@@ -2146,6 +2174,7 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
 
       // Set data surat dari database
       setState(() {
+        _suratNameArabic = chapter.nameArabic;
         _suratNameSimple = chapter.nameSimple;
         _suratVersesCount = chapter.versesCount.toString();
       });
@@ -2585,56 +2614,43 @@ class _VoskSTTCorrectionPageState extends State<VoskSTTCorrectionPage>
     );
   }
 
-  // ==================== SURAH GLYPH HELPER ====================
-String _formatSurahIdForGlyph(int surahId) {
-  // Format ID surat untuk font glyph
-  // Jika <= 9: "surah00X"
-  // Jika >= 10 && <= 99: "surah0XX"
-  // Jika >= 100: "surahXXX"
-  
-  if (surahId <= 9) {
-    return 'surah00$surahId';
-  } else if (surahId <= 99) {
-    return 'surah0$surahId';
-  } else {
-    return 'surah$surahId';
-  }
-}
-
   Widget _buildSuratInfoHeader() {
     return const SizedBox.shrink();
   }
 
-Widget _buildVerticalModeHeader() {
-  if (widget.suratId == null || widget.suratId <= 0) return const SizedBox.shrink();
+  Widget _buildVerticalModeHeader() {
+    if (_suratNameArabic.isEmpty) return const SizedBox.shrink();
 
-  return Container(
-    margin: const EdgeInsets.symmetric(vertical: 8),
-    child: Stack(
-      alignment: Alignment.center,
-      children: [
-        Text(
-          'header',
-          style: TextStyle(
-            fontSize: MediaQuery.of(context).size.width * 0.12,
-            fontFamily: 'Quran-Common',
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Text(
+            'header',
+            style: TextStyle(
+              fontSize:
+                  MediaQuery.of(context).size.width *
+                  0.12, // 12% dari lebar layar
+              fontFamily: 'Quran-Common',
+            ),
+            textAlign: TextAlign.center,
           ),
-          textAlign: TextAlign.center,
-        ),
-        Text(
-          _formatSurahIdForGlyph(widget.suratId), // Menggunakan ID yang sudah diformat
-          style: const TextStyle(
-            fontSize: 40,
-            fontFamily: 'surah-name-v2',
-            fontWeight: FontWeight.w500,
-            color: Colors.black,
+
+          Text(
+            'surah036',
+            style: const TextStyle(
+              fontSize: 40,
+              fontFamily: 'surah-name-v2',
+              fontWeight: FontWeight.w500,
+              color: Colors.black,
+            ),
+            textAlign: TextAlign.center,
           ),
-          textAlign: TextAlign.center,
-        ),
-      ],
-    ),
-  );
-}
+        ],
+      ),
+    );
+  }
 
   Widget _buildQuranModeDisplay() {
     return GestureDetector(
@@ -2649,25 +2665,17 @@ Widget _buildVerticalModeHeader() {
           }
         }
       },
-child: FutureBuilder<List<MushafPageLine>>(
-  future: _sqliteService.getMushafPageLines(_currentPage),
-  builder: (context, snapshot) {
-    if (snapshot.connectionState == ConnectionState.waiting) {
-      // Return previous content or empty container while loading
-      return Container(
-        height: MushafTextRenderer.PAGE_HEIGHT,
-        child: const SizedBox.shrink(),
-      );
-    }
-    
-    if (!snapshot.hasData || snapshot.data!.isEmpty) {
-      return Container(
-        height: MushafTextRenderer.PAGE_HEIGHT,
-        child: const Center(child: Text('No content for this page')),
-      );
-    }
+      child: FutureBuilder<List<MushafPageLine>>(
+        future: _sqliteService.getMushafPageLines(_currentPage),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-    final pageLines = snapshot.data!;
+          final pageLines = snapshot.data!;
+          if (pageLines.isEmpty) {
+            return const Center(child: Text('No content for this page'));
+          }
 
           // Fixed height container for consistent 15-line layout
           return Container(
@@ -2679,6 +2687,7 @@ child: FutureBuilder<List<MushafPageLine>>(
             child: Padding(
               padding: EdgeInsets.symmetric(
                 horizontal: MushafTextRenderer.PAGE_PADDING,
+                vertical: 20,
               ),
               child: Column(
                 children: [
@@ -2688,6 +2697,10 @@ child: FutureBuilder<List<MushafPageLine>>(
 
                   // Render exactly 15 lines
                   Expanded(child: Column(children: _buildPageLines(pageLines))),
+
+                  // Page footer
+                  const SizedBox(height: 10),
+                  _buildPageFooter(),
                 ],
               ),
             ),
@@ -2830,40 +2843,35 @@ child: FutureBuilder<List<MushafPageLine>>(
   }
 
   // Build surah name header
-Widget _buildSurahNameLine(MushafPageLine line) {
-  // Gunakan surahNumber untuk mendapatkan glyph code
-  final surahGlyphCode = line.surahNumber != null 
-      ? _formatSurahIdForGlyph(line.surahNumber!) 
-      : '';
-
-  return Container(
-    alignment: Alignment.center,
-    child: Stack(
+  Widget _buildSurahNameLine(MushafPageLine line) {
+    return Container(
       alignment: Alignment.center,
-      children: [
-        Text(
-          'header',
-          style: TextStyle(
-            fontSize: MediaQuery.of(context).size.width * 0.12,
-            fontFamily: 'Quran-Common',
-            color: Colors.black87,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Text(
+            'header',
+            style: TextStyle(
+              fontSize: MediaQuery.of(context).size.width * 0.12,
+              fontFamily: 'Quran-Common',
+              color: Colors.black87,
+            ),
+            textAlign: TextAlign.center,
           ),
-          textAlign: TextAlign.center,
-        ),
-        Text(
-          surahGlyphCode, // Menggunakan glyph code, bukan nameArabic
-          style: const TextStyle(
-            fontSize: 40,
-            fontFamily: 'surah-name-v2',
-            color: Colors.black,
+          Text(
+            line.surahNameArabic ?? '',
+            style: const TextStyle(
+              fontSize: 30,
+              fontFamily: 'surah-name-v2',
+              color: Colors.black,
+            ),
+            textAlign: TextAlign.center,
+            textDirection: TextDirection.rtl,
           ),
-          textAlign: TextAlign.center,
-          textDirection: TextDirection.rtl,
-        ),
-      ],
-    ),
-  );
-}
+        ],
+      ),
+    );
+  }
 
   // Build basmallah line
   Widget _buildBasmallahLine(MushafPageLine line) {
@@ -2964,7 +2972,7 @@ Widget _buildSurahNameLine(MushafPageLine line) {
   double _calculateOptimalFontSize(MushafPageLine line) {
     if (line.ayahSegments == null) return 15.0;
 
-    return 18.0;
+    return 16.0;
   }
 
   static bool containsArabicNumbers(String text) {
@@ -3041,43 +3049,35 @@ Widget _buildSurahNameLine(MushafPageLine line) {
         .join();
   }
 
-Future<void> _navigateToPage(int newPage) async {
-  setState(() {
-    _currentPage = newPage;
-  });
+  Future<void> _navigateToPage(int newPage) async {
+    setState(() {
+      _currentPage = newPage;
+      _isLoading = true;
+    });
 
-  await _loadCurrentPageAyats();
+    try {
+      await _loadCurrentPageAyats();
 
-  if (_currentPageAyats.isNotEmpty) {
-    final firstAyatOnPage = _currentPageAyats.first;
-    final newIndex = _ayatList.indexWhere(
-      (a) =>
-          a.surah_id == firstAyatOnPage.surah_id &&
-          a.ayah == firstAyatOnPage.ayah,
-    );
+      // Update current ayat index to first ayat on new page
+      if (_currentPageAyats.isNotEmpty) {
+        final firstAyatOnPage = _currentPageAyats.first;
+        final newIndex = _ayatList.indexWhere(
+          (a) =>
+              a.surah_id == firstAyatOnPage.surah_id &&
+              a.ayah == firstAyatOnPage.ayah,
+        );
 
-    if (newIndex >= 0) {
+        if (newIndex >= 0) {
+          _currentAyatIndex = newIndex;
+          _currentAyatNumber = _ayatList[newIndex].ayah;
+        }
+      }
+    } finally {
       setState(() {
-        _currentAyatIndex = newIndex;
-        _currentAyatNumber = _ayatList[newIndex].ayah;
+        _isLoading = false;
       });
     }
   }
-
-  // Pre-load adjacent pages for smooth navigation
-  _preloadAdjacentPages();
-}
-
-// TAMBAHKAN method ini setelah method _navigateToPage
-void _preloadAdjacentPages() {
-  // Pre-load next and previous pages in background
-  if (_currentPage > 1) {
-    _sqliteService.getMushafPageLines(_currentPage - 1);
-  }
-  if (_currentPage < 604) {
-    _sqliteService.getMushafPageLines(_currentPage + 1);
-  }
-}
 
   Widget _buildEnhancedAllAyatDisplay() {
     List<Widget> ayatWidgets = [];
@@ -4427,8 +4427,6 @@ class EnhancedModelInfo {
   });
 }
 
-// TAMBAHKAN di bagian atas class QuranSQLiteService setelah line database declarations
-final Map<int, List<MushafPageLine>> _pageCache = {};
 // ==================== FIXED QURAN SQLITE SERVICE ====================
 class QuranSQLiteService {
   static final QuranSQLiteService _instance = QuranSQLiteService._internal();
@@ -4636,119 +4634,109 @@ class QuranSQLiteService {
   }
 
   // NEW METHOD: Get properly structured page lines for mushaf rendering
-Future<List<MushafPageLine>> getMushafPageLines(int pageNumber) async {
-  // Check cache first
-  if (_pageCache.containsKey(pageNumber)) {
-    return _pageCache[pageNumber]!;
-  }
+  Future<List<MushafPageLine>> getMushafPageLines(int pageNumber) async {
+    print('MUSHAF_LINES: Getting lines for page $pageNumber');
 
-  print('MUSHAF_LINES: Getting lines for page $pageNumber');
+    final pageLayout = await getPageLayout(pageNumber);
+    final List<MushafPageLine> pageLines = [];
 
-  final pageLayout = await getPageLayout(pageNumber);
-  final List<MushafPageLine> pageLines = [];
+    for (final layout in pageLayout) {
+      MushafPageLine line;
 
-  for (final layout in pageLayout) {
-    MushafPageLine line;
+      switch (layout.lineType) {
+        case 'surah_name':
+          if (layout.surahNumber != null) {
+            final chapter = await getChapterInfo(layout.surahNumber!);
+            line = MushafPageLine(
+              lineNumber: layout.lineNumber,
+              lineType: layout.lineType,
+              isCentered: layout.isCentered,
+              surahNumber: layout.surahNumber,
+              surahNameArabic: chapter.nameArabic,
+              surahNameSimple: chapter.nameSimple,
+            );
+          } else {
+            continue;
+          }
+          break;
 
-    switch (layout.lineType) {
-      case 'surah_name':
-        if (layout.surahNumber != null) {
-          final chapter = await getChapterInfo(layout.surahNumber!);
+        case 'basmallah':
           line = MushafPageLine(
             lineNumber: layout.lineNumber,
             lineType: layout.lineType,
             isCentered: layout.isCentered,
-            surahNumber: layout.surahNumber,
-            surahNameArabic: chapter.nameArabic,
-            surahNameSimple: chapter.nameSimple,
+            basmallahText: '﷽', // This will be replaced with proper font
           );
-        } else {
-          continue;
-        }
-        break;
+          break;
 
-      case 'basmallah':
-        line = MushafPageLine(
-          lineNumber: layout.lineNumber,
-          lineType: layout.lineType,
-          isCentered: layout.isCentered,
-          basmallahText: '﷽',
-        );
-        break;
+        case 'ayah':
+          if (layout.firstWordId == null || layout.lastWordId == null) continue;
 
-      case 'ayah':
-        if (layout.firstWordId == null || layout.lastWordId == null) continue;
+          // Get words for this specific line
+          final lineWords = await _getWordsByIdRange(
+            layout.firstWordId!,
+            layout.lastWordId!,
+          );
 
-        final lineWords = await _getWordsByIdRange(
-          layout.firstWordId!,
-          layout.lastWordId!,
-        );
+          if (lineWords.isEmpty) continue;
 
-        if (lineWords.isEmpty) continue;
-
-        Map<String, List<WordData>> ayahSegments = {};
-        for (final word in lineWords) {
-          final key = '${word.surah}:${word.ayah}';
-          if (!ayahSegments.containsKey(key)) {
-            ayahSegments[key] = [];
+          // Group words by ayah for this line
+          Map<String, List<WordData>> ayahSegments = {};
+          for (final word in lineWords) {
+            final key = '${word.surah}:${word.ayah}';
+            if (!ayahSegments.containsKey(key)) {
+              ayahSegments[key] = [];
+            }
+            ayahSegments[key]!.add(word);
           }
-          ayahSegments[key]!.add(word);
-        }
 
-        line = MushafPageLine(
-          lineNumber: layout.lineNumber,
-          lineType: layout.lineType,
-          isCentered: layout.isCentered,
-          firstWordId: layout.firstWordId,
-          lastWordId: layout.lastWordId,
-          ayahSegments: ayahSegments.entries.map((entry) {
-            final parts = entry.key.split(':');
-            return AyahSegment(
-              surahId: int.parse(parts[0]),
-              ayahNumber: int.parse(parts[1]),
-              words: entry.value,
-              isStartOfAyah: entry.value.first.wordNumber == 1,
-              isEndOfAyah: false,
-            );
-          }).toList(),
-        );
-        break;
+          // Create line with ayah segments
+          line = MushafPageLine(
+            lineNumber: layout.lineNumber,
+            lineType: layout.lineType,
+            isCentered: layout.isCentered,
+            firstWordId: layout.firstWordId,
+            lastWordId: layout.lastWordId,
+            ayahSegments: ayahSegments.entries.map((entry) {
+              final parts = entry.key.split(':');
+              return AyahSegment(
+                surahId: int.parse(parts[0]),
+                ayahNumber: int.parse(parts[1]),
+                words: entry.value,
+                isStartOfAyah: entry.value.first.wordNumber == 1,
+                isEndOfAyah: false, // Will be determined later
+              );
+            }).toList(),
+          );
+          break;
 
-      default:
-        continue;
+        default:
+          continue;
+      }
+
+      pageLines.add(line);
     }
 
-    pageLines.add(line);
-  }
-
-  // Mark end of ayahs
-  for (final line in pageLines) {
-    if (line.ayahSegments != null) {
-      for (final segment in line.ayahSegments!) {
-        final totalWordsInAyah = await _getTotalWordsInAyah(
-          segment.surahId,
-          segment.ayahNumber,
-        );
-        if (segment.words.isNotEmpty &&
-            segment.words.last.wordNumber == totalWordsInAyah) {
-          segment.isEndOfAyah = true;
+    // Mark end of ayahs
+    for (final line in pageLines) {
+      if (line.ayahSegments != null) {
+        for (final segment in line.ayahSegments!) {
+          // Check if this is the last word of the ayah
+          final totalWordsInAyah = await _getTotalWordsInAyah(
+            segment.surahId,
+            segment.ayahNumber,
+          );
+          if (segment.words.isNotEmpty &&
+              segment.words.last.wordNumber == totalWordsInAyah) {
+            segment.isEndOfAyah = true;
+          }
         }
       }
     }
-  }
 
-  // Cache the result
-  _pageCache[pageNumber] = pageLines;
-  
-  // Keep cache size manageable (max 10 pages)
-  if (_pageCache.length > 10) {
-    final oldestKey = _pageCache.keys.first;
-    _pageCache.remove(oldestKey);
+    print('MUSHAF_LINES: Processed ${pageLines.length} lines');
+    return pageLines;
   }
-
-  print('MUSHAF_LINES: Processed ${pageLines.length} lines');
-  return pageLines;
-}
 
   // Helper method to get total words in an ayah
   Future<int> _getTotalWordsInAyah(int surahId, int ayahNumber) async {
