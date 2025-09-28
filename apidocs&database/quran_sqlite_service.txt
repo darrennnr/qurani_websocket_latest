@@ -1,0 +1,402 @@
+import 'package:sqflite/sqflite.dart';
+import 'package:vosk_stt/stt/database/db_helper.dart';
+
+// ==================== DATA MODELS ====================
+
+class AyatData {
+  final int surah_id;
+  final int ayah;
+  final List<WordData> words;
+  final int page;
+  final int juz;
+  final String fullArabicText;
+
+  AyatData({
+    required this.surah_id,
+    required this.ayah,
+    required this.words,
+    required this.page,
+    required this.juz,
+    required this.fullArabicText,
+  });
+
+  // Computed properties for backward compatibility
+  String get arabic => words.map((w) => w.text).join(' ');
+  String get noTashkeel => words.map((w) => w.text).join(' '); // TODO: Remove tashkeel
+  String get transliteration => ''; // Not available in new DB
+  List<String> get wordsArrayNt => words.map((w) => w.text).toList();
+  double get quarterHizb => 0.0; // Not available in new DB
+
+  factory AyatData.fromWordsAndPage({
+    required int surahId,
+    required int ayahNumber, 
+    required List<WordData> words,
+    required int page,
+    required int juz,
+  }) {
+    return AyatData(
+      surah_id: surahId,
+      ayah: ayahNumber,
+      words: words,
+      page: page,
+      juz: juz,
+      fullArabicText: words.map((w) => w.text).join(' '),
+    );
+  }
+
+  // Backward compatibility factory (for existing Supabase code)
+  factory AyatData.fromJson(Map<String, dynamic> json) {
+    // This is a placeholder - you won't use this with SQLite
+    // but keeping for compatibility during transition
+    return AyatData(
+      surah_id: json['surah_id'] ?? 0,
+      ayah: json['ayah'] ?? 0,
+      words: [], // Empty for now
+      page: json['page'] ?? 1,
+      juz: json['juz'] ?? 1,
+      fullArabicText: json['arabic'] ?? '',
+    );
+  }
+}
+
+class WordData {
+  final int id;
+  final String location;
+  final int surah;
+  final int ayah;
+  final int wordNumber;
+  final String text;
+
+  WordData({
+    required this.id,
+    required this.location,
+    required this.surah,
+    required this.ayah,
+    required this.wordNumber,
+    required this.text,
+  });
+
+  factory WordData.fromSqlite(Map<String, dynamic> row) {
+    return WordData(
+      id: row['id'] as int,
+      location: row['location'] as String,
+      surah: row['surah'] as int,
+      ayah: row['ayah'] as int,
+      wordNumber: row['word'] as int,
+      text: row['text'] as String,
+    );
+  }
+}
+
+class ChapterData {
+  final int id;
+  final String name;
+  final String nameSimple;
+  final String nameArabic;
+  final int revelationOrder;
+  final String revelationPlace;
+  final int versesCount;
+  final int bismillahPre;
+
+  ChapterData({
+    required this.id,
+    required this.name,
+    required this.nameSimple,
+    required this.nameArabic,
+    required this.revelationOrder,
+    required this.revelationPlace,
+    required this.versesCount,
+    required this.bismillahPre,
+  });
+
+  // Backward compatibility properties
+  String get namalatin => nameSimple;
+  String get arti => ''; // Not available in new DB
+  String get tempatturun => revelationPlace;
+  String get deskripsi => ''; // Not available in new DB
+  int get jumlahayat => versesCount;
+
+  factory ChapterData.fromSqlite(Map<String, dynamic> row) {
+    return ChapterData(
+      id: row['id'] as int,
+      name: row['name'] as String,
+      nameSimple: row['name_simple'] as String,
+      nameArabic: row['name_arabic'] as String,
+      revelationOrder: row['revelation_order'] as int,
+      revelationPlace: row['revelation_place'] as String,
+      versesCount: row['verses_count'] as int,
+      bismillahPre: row['bismillah_pre'] as int,
+    );
+  }
+}
+
+class PageLayoutData {
+  final int pageNumber;
+  final int lineNumber;
+  final String lineType;
+  final bool isCentered;
+  final int? firstWordId;
+  final int? lastWordId;
+  final int? surahNumber;
+
+  PageLayoutData({
+    required this.pageNumber,
+    required this.lineNumber,
+    required this.lineType,
+    required this.isCentered,
+    this.firstWordId,
+    this.lastWordId,
+    this.surahNumber,
+  });
+
+  factory PageLayoutData.fromSqlite(Map<String, dynamic> row) {
+    return PageLayoutData(
+      pageNumber: row['page_number'] as int,
+      lineNumber: row['line_number'] as int,
+      lineType: row['line_type'] as String,
+      isCentered: (row['is_centered'] as int) == 1,
+      firstWordId: int.tryParse(row['first_word_id']?.toString() ?? ''),
+      lastWordId: int.tryParse(row['last_word_id']?.toString() ?? ''),
+      surahNumber: int.tryParse(row['surah_number']?.toString() ?? ''),
+    );
+  }
+}
+
+// ==================== SQLITE DATABASE SERVICE ====================
+
+class QuranSQLiteService {
+  static final QuranSQLiteService _instance = QuranSQLiteService._internal();
+  factory QuranSQLiteService() => _instance;
+  QuranSQLiteService._internal();
+
+  Database? _metadataDB;
+  Database? _uthmaniBD; 
+  Database? _uthmaniLinesDB;
+
+  // Initialize all databases
+  Future<void> initialize() async {
+    _metadataDB = await DBHelper.openDB(DBType.metadata);
+    _uthmaniBD = await DBHelper.openDB(DBType.uthmani);
+    _uthmaniLinesDB = await DBHelper.openDB(DBType.uthmani15);
+  }
+
+  // Get chapter/surah information
+  Future<ChapterData> getChapterInfo(int surahId) async {
+    if (_metadataDB == null) await initialize();
+    
+    final result = await _metadataDB!.query(
+      'chapters',
+      where: 'id = ?',
+      whereArgs: [surahId],
+      limit: 1,
+    );
+
+    if (result.isEmpty) {
+      throw Exception('Chapter not found: $surahId');
+    }
+
+    return ChapterData.fromSqlite(result.first);
+  }
+
+  // Get all words for a specific surah
+  Future<List<WordData>> getSurahWords(int surahId) async {
+    if (_uthmaniBD == null) await initialize();
+
+    final result = await _uthmaniBD!.query(
+      'words',
+      where: 'surah = ?',
+      whereArgs: [surahId],
+      orderBy: 'ayah ASC, word ASC',
+    );
+
+    return result.map((row) => WordData.fromSqlite(row)).toList();
+  }
+
+  // Get words for specific ayah
+  Future<List<WordData>> getAyahWords(int surahId, int ayahNumber) async {
+    if (_uthmaniBD == null) await initialize();
+
+    final result = await _uthmaniBD!.query(
+      'words',
+      where: 'surah = ? AND ayah = ?',
+      whereArgs: [surahId, ayahNumber],
+      orderBy: 'word ASC',
+    );
+
+    return result.map((row) => WordData.fromSqlite(row)).toList();
+  }
+
+  // Get ayat data for entire surah
+  Future<List<AyatData>> getSurahAyatData(int surahId) async {
+    final words = await getSurahWords(surahId);
+    final chapter = await getChapterInfo(surahId);
+    
+    // Group words by ayah
+    Map<int, List<WordData>> ayahGroups = {};
+    for (final word in words) {
+      if (!ayahGroups.containsKey(word.ayah)) {
+        ayahGroups[word.ayah] = [];
+      }
+      ayahGroups[word.ayah]!.add(word);
+    }
+
+    List<AyatData> ayatList = [];
+    
+    for (int ayahNum = 1; ayahNum <= chapter.versesCount; ayahNum++) {
+      final ayahWords = ayahGroups[ayahNum] ?? [];
+      
+      // Calculate page and juz (simplified - you may need more complex logic)
+      final page = await _getPageForAyah(surahId, ayahNum);
+      final juz = _calculateJuz(surahId, ayahNum);
+      
+      ayatList.add(AyatData.fromWordsAndPage(
+        surahId: surahId,
+        ayahNumber: ayahNum,
+        words: ayahWords,
+        page: page,
+        juz: juz,
+      ));
+    }
+
+    return ayatList;
+  }
+
+  // Get page layout information
+  Future<List<PageLayoutData>> getPageLayout(int pageNumber) async {
+    if (_uthmaniLinesDB == null) await initialize();
+
+    final result = await _uthmaniLinesDB!.query(
+      'pages',
+      where: 'page_number = ?',
+      whereArgs: [pageNumber],
+      orderBy: 'line_number ASC',
+    );
+
+    return result.map((row) => PageLayoutData.fromSqlite(row)).toList();
+  }
+
+  // Get words for specific page (for Quran mode)
+  Future<List<WordData>> getPageWords(int pageNumber) async {
+    final pageLayout = await getPageLayout(pageNumber);
+    final List<WordData> pageWords = [];
+
+    for (final layout in pageLayout) {
+      if (layout.lineType == 'ayah' && 
+          layout.firstWordId != null && 
+          layout.lastWordId != null) {
+        
+        final words = await _getWordsByIdRange(
+          layout.firstWordId!,
+          layout.lastWordId!
+        );
+        pageWords.addAll(words);
+      }
+    }
+
+    return pageWords;
+  }
+
+  // Get words by ID range
+  Future<List<WordData>> _getWordsByIdRange(int startId, int endId) async {
+    if (_uthmaniBD == null) await initialize();
+
+    final result = await _uthmaniBD!.query(
+      'words',
+      where: 'id >= ? AND id <= ?',
+      whereArgs: [startId, endId],
+      orderBy: 'id ASC',
+    );
+
+    return result.map((row) => WordData.fromSqlite(row)).toList();
+  }
+
+  // Helper method to get page for ayah
+  Future<int> _getPageForAyah(int surahId, int ayahNumber) async {
+    if (_uthmaniLinesDB == null) await initialize();
+
+    // Get words for this ayah
+    final ayahWords = await getAyahWords(surahId, ayahNumber);
+    if (ayahWords.isEmpty) return 1;
+
+    // Find page by checking which page contains the first word of this ayah
+    final firstWordId = ayahWords.first.id;
+
+    final result = await _uthmaniLinesDB!.rawQuery('''
+      SELECT page_number FROM pages 
+      WHERE line_type = 'ayah' 
+      AND first_word_id <= ? 
+      AND last_word_id >= ?
+      LIMIT 1
+    ''', [firstWordId, firstWordId]);
+
+    if (result.isNotEmpty) {
+      return result.first['page_number'] as int;
+    }
+
+    return 1; // Default fallback
+  }
+
+  // Helper method to calculate Juz (simplified)
+  int _calculateJuz(int surahId, int ayahNumber) {
+    // This is a simplified Juz calculation
+    // You may need to implement a more accurate calculation based on your requirements
+    if (surahId == 1) return 1; // Al-Fatiha
+    if (surahId == 2) {
+      if (ayahNumber <= 141) return 1;
+      if (ayahNumber <= 252) return 2;
+      return 3;
+    }
+    if (surahId <= 4) return 2;
+    if (surahId <= 6) return 3;
+    // Add more accurate Juz boundaries as needed
+    return 1; // Default
+  }
+
+  // Get ayat data for current page (Quran mode)
+  Future<List<AyatData>> getCurrentPageAyats(int pageNumber) async {
+    final pageWords = await getPageWords(pageNumber);
+    
+    // Group words by surah and ayah
+    Map<String, List<WordData>> ayahGroups = {};
+    for (final word in pageWords) {
+      final key = '${word.surah}:${word.ayah}';
+      if (!ayahGroups.containsKey(key)) {
+        ayahGroups[key] = [];
+      }
+      ayahGroups[key]!.add(word);
+    }
+
+    List<AyatData> ayatList = [];
+    
+    for (final entry in ayahGroups.entries) {
+      final parts = entry.key.split(':');
+      final surahId = int.parse(parts[0]);
+      final ayahNum = int.parse(parts[1]);
+      final words = entry.value;
+      
+      ayatList.add(AyatData.fromWordsAndPage(
+        surahId: surahId,
+        ayahNumber: ayahNum,
+        words: words,
+        page: pageNumber,
+        juz: _calculateJuz(surahId, ayahNum),
+      ));
+    }
+
+    // Sort by surah then ayah
+    ayatList.sort((a, b) {
+      if (a.surah_id != b.surah_id) {
+        return a.surah_id.compareTo(b.surah_id);
+      }
+      return a.ayah.compareTo(b.ayah);
+    });
+
+    return ayatList;
+  }
+
+  void dispose() {
+    _metadataDB?.close();
+    _uthmaniBD?.close();
+    _uthmaniLinesDB?.close();
+  }
+}
